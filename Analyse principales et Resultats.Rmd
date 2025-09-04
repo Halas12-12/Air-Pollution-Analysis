@@ -1,0 +1,1493 @@
+---
+title: "Analyse principales et Resultats"
+author: "ASSOUMA ALASSANE Hariph"
+date: "2025-03-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+install.packages("fixest")
+```
+
+```{r}
+install.packages(c("fixest", "ggplot2", "gt", "webshot2"))
+webshot::install_phantomjs()  # requis une seule fois
+```
+
+
+```{r}
+library(dtplyr)
+library(tidyverse)
+library(lubridate)
+library(haven)
+library(plm)
+library(stargazer)
+library(plot3D)
+library(plotrix)
+library(ggplot2)
+library(viridis)
+library(lmtest)    # Pour les tests statistiques
+library(sandwich)  # Pour corriger l'hétéroscédasticité
+library(knitr)       # Alternative pour affichage propre
+library(kableExtra)  # Pour styliser le tableau
+```
+
+
+```{r}
+# Charger la base HALASdata.dta
+data <- read_dta("C:/Users/HP/OneDrive/Bureau/HALAS Master Thesis/Data/HALASdata.dta")
+```
+
+
+```{r}
+# Afficher les premières lignes
+head(data)
+
+# Vérifier les types de variables
+str(data)
+
+# Résumé des statistiques
+summary(data)
+```
+
+
+
+
+```{r}
+# Ajouter une petite constante pour éviter log(0)
+data$log_error <- log1p(data$error)  # log(1 + x)
+
+```
+
+```{r}
+# Créer la variable log_gdp
+data$log_gdp <- log(data$gdp)
+```
+
+
+```{r}
+min(data$log_error, na.rm = TRUE)
+max(data$log_error, na.rm = TRUE)
+sd(data$log_error, na.rm = TRUE)
+
+```
+
+
+#effet direct 
+```{r}
+# Charger les bibliothèques nécessaires
+library(plm)
+library(lmtest)
+library(sandwich)
+library(stargazer)
+
+
+```
+
+
+```{r}
+# Régression OLS sans constante
+model_1 <- lm(log_error ~ AQI , data = data)
+
+# Extraire les résidus du modèle
+residuals <- resid(model_1)
+
+# Calcul de la somme des carrés des résidus
+ss_res <- sum(residuals^2)
+
+# Calcul de la somme totale des carrés (autour de la moyenne de log_error)
+ss_tot <- sum((data$log_error - mean(data$log_error))^2)
+
+# R² recalculé manuellement
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# Affichage du R² corrigé
+cat("Corrected R²:", round(r2_corrected, 4), "\n")
+
+# Résumé du modèle OLS avec le R² recalculé
+summary_model_1 <- summary(model_1)
+summary_model_1$r.squared <- r2_corrected
+
+# Affichage du résumé
+print(summary_model_1)
+
+```
+
+
+
+```{r}
+library(plm)
+
+# Transformer en panel avec effets fixes Pays & Année
+pdata <- pdata.frame(data, index = c("country", "year"))
+
+# Régression en panel avec effets fixes Country & Year
+model_2 <- plm(log_error ~ AQI, 
+               data = pdata, model = "within", effect = "twoways")
+
+# Extraire les résidus et recalculer le vrai R²
+residuals <- resid(model_2)
+ss_res <- sum(residuals^2)  # Somme des carrés des résidus
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)  # Somme des carrés totaux
+r2_corrected <- 1 - (ss_res / ss_tot)  # Vrai R²
+
+# Obtenir le résumé du modèle sous forme de liste
+summary_model_2 <- summary(model_2)
+
+# Remplacer uniquement R-Squared et laisser Adj. R-Squared inchangé
+summary_model_2$r.squared <- r2_corrected  # Correction du R²
+
+# Forcer l'affichage du résumé modifié
+print(summary_model_2)
+
+
+```
+
+
+```{r}
+library(plm)
+
+
+
+# Transformer en panel avec effets fixes Pays & Année
+pdata <- pdata.frame(data, index = c("country", "year"))
+
+# Régression en panel avec effets fixes Country & Year
+model_3 <- plm(log_error ~ AQI + log_gdp + inflation_rate + unemployment_rate, 
+               data = pdata, model = "within", effect = "twoways")
+
+# Extraire les résidus et recalculer le vrai R²
+residuals <- resid(model_3)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# Obtenir le résumé du modèle
+summary_model_3 <- summary(model_3)
+
+# Remplacer le R² affiché
+summary_model_3$r.squared <- r2_corrected
+
+# Forcer l'affichage du résumé modifié
+print(summary_model_3)
+ 
+```
+
+
+```{r}
+library(plm)
+
+# Transformer en panel avec effets fixes Analyste & Année
+pdata <- pdata.frame(data, index = c("id_analyst", "year"))
+
+# Régression en panel avec effets fixes Analyste & Année
+model_4 <- plm(log_error ~ AQI + log_gdp + inflation_rate + unemployment_rate, 
+               data = pdata, model = "within", effect = "twoways")
+
+# Extraire les résidus et recalculer le vrai R²
+residuals <- resid(model_4)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# Obtenir le résumé du modèle
+summary_model_4 <- summary(model_4)
+
+# Remplacer le R² affiché
+summary_model_4$r.squared <- r2_corrected
+
+# Forcer l'affichage du résumé modifié
+print(summary_model_4)     
+
+```
+
+
+```{r}
+library(stargazer)
+
+# 1. Extraire / stocker tous les R²
+r2_model_1 <- summary(model_1)$r.squared
+r2_model_2 <- summary_model_2$r.squared
+r2_model_3 <- summary_model_3$r.squared
+r2_model_4 <- summary_model_4$r.squared
+
+r2_values <- c(
+  round(r2_model_1, 4),
+  round(r2_model_2, 4),
+  round(r2_model_3, 4),
+  round(r2_model_4, 4)
+)
+
+# 2. Effets fixes à indiquer pour chaque modèle
+fe_values <- list(
+  c("NO",  "YES", "YES", "NO"),   # Country FE
+  c("NO",  "YES", "YES", "YES"),  # Year FE
+  c("NO",  "NO",  "NO",  "YES")   # Analyst FE
+)
+
+# 3. Créer le tableau
+stargazer(model_1, model_2, model_3, model_4,
+          type = "text",  # ou "latex", "html"
+          title = "Comparaison des modèles économétriques",
+          column.labels = c("1", "2", "3", "4"),
+          align = TRUE,
+          omit.stat = c("rsq"),  # Retirer R² par défaut
+          add.lines = list(
+            c("R-Squared", r2_values),
+            c("Country FE", fe_values[[1]]),
+            c("Year FE", fe_values[[2]]),
+            c("Analyst FE", fe_values[[3]])
+          ))
+
+
+```
+
+```{r}
+# Exporter les résultats sous format HTML
+stargazer(model_1, model_2, model_3, model_4,
+          type = "html",
+          title = "Comparaison des modèles économétriques",
+          column.labels = c("1", "2", "3", "4"),
+          align = TRUE,
+          omit.stat = c("rsq", "adj.rsq"),      # Supprime R² classique et ajusté
+          omit = "Constant",                    # Omettre la constante du tableau
+          add.lines = list(
+            c("R-Squared", 
+              format(round(r2_values[1], 4), nsmall = 4),
+              format(round(r2_values[2], 4), nsmall = 4),
+              format(round(r2_values[3], 4), nsmall = 4),
+              format(round(r2_values[4], 4), nsmall = 4)),
+            c("Country FE", fe_values[[1]]),  
+            c("Year FE", fe_values[[2]]),  
+            c("Analyst FE", fe_values[[3]])
+          ),
+          out = "resultats_stargazer.html")
+
+
+```
+
+
+
+
+
+#effet cumultatif 
+```{r}
+library(plm)
+
+# Transformer en panel avec effets fixes Analyste & Année
+pdata <- pdata.frame(data, index = c("id_analyst", "year"))
+
+# Régression en panel avec effets fixes Analyste & Année
+model_1 <- plm(log_error ~ AQI+ log_gdp + inflation_rate + unemployment_rate, 
+               data = pdata, model = "within", effect = "twoways")
+
+# Extraire les résidus et recalculer le vrai R²
+residuals <- resid(model_1)
+ss_res <- sum(residuals^2)  # Somme des carrés des résidus
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)  # Somme des carrés totaux
+r2_corrected <- 1 - (ss_res / ss_tot)  # Vrai R²
+
+# Obtenir le résumé du modèle sous forme de liste
+summary_model_1 <- summary(model_1)
+
+# Remplacer uniquement R-Squared et laisser Adj. R-Squared inchangé
+summary_model_1$r.squared <- r2_corrected  # Correction du R²
+
+# Forcer l'affichage du résumé modifié
+print(summary_model_1)
+
+```
+
+
+```{r}
+library(plm)
+
+# Transformer en panel avec effets fixes Analyste & Année
+pdata <- pdata.frame(data, index = c("id_analyst", "year"))
+
+# Régression en panel avec les lags J-1 des polluants, sans AQI ni variables de contrôle
+model_2 <- plm(log_error ~ PM2_5_lag1 + PM10_lag1 + NO2_lag1 + SO2_lag1+ log_gdp + inflation_rate + unemployment_rate, 
+               data = pdata, model = "within", effect = "twoways")
+
+# Extraire les résidus et recalculer le vrai R²
+residuals <- resid(model_2)
+ss_res <- sum(residuals^2)  # Somme des carrés des résidus
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)  # Somme des carrés totaux
+r2_corrected <- 1 - (ss_res / ss_tot)  # Vrai R²
+
+# Obtenir le résumé du modèle sous forme de liste
+summary_model_2 <- summary(model_2)
+
+# Remplacer uniquement R-Squared et laisser Adj. R-Squared inchangé
+summary_model_2$r.squared <- r2_corrected  # Correction du R²
+
+# Forcer l'affichage du résumé modifié
+print(summary_model_2)
+
+```
+
+
+```{r}
+library(plm)
+
+# Transformer en panel avec effets fixes Analyste & Année
+pdata <- pdata.frame(data, index = c("id_analyst", "year"))
+
+# Régression en panel avec les lags d'une semaine des polluants, sans AQI ni variables de contrôle
+model_3 <- plm(log_error ~ PM2_5_week + PM10_week + NO2_week + SO2_week+ log_gdp + inflation_rate + unemployment_rate, 
+               data = pdata, model = "within", effect = "twoways")
+
+# Extraire les résidus et recalculer le vrai R²
+residuals <- resid(model_3)
+ss_res <- sum(residuals^2)  # Somme des carrés des résidus
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)  # Somme des carrés totaux
+r2_corrected <- 1 - (ss_res / ss_tot)  # Vrai R²
+
+# Obtenir le résumé du modèle sous forme de liste
+summary_model_3 <- summary(model_3)
+
+# Remplacer uniquement R-Squared et laisser Adj. R-Squared inchangé
+summary_model_3$r.squared <- r2_corrected  # Correction du R²
+
+# Forcer l'affichage du résumé modifié
+print(summary_model_3)
+
+```
+
+
+```{r}
+library(plm)
+
+# Transformer en panel avec effets fixes Analyste & Année
+pdata <- pdata.frame(data, index = c("id_analyst", "year"))
+
+# Régression en panel avec les lags de deux semaines des polluants, sans AQI ni variables de contrôle
+model_4 <- plm(log_error ~ PM2_5_2weeks + PM10_2weeks + NO2_2weeks + SO2_2weeks+ log_gdp + inflation_rate + unemployment_rate, 
+               data = pdata, model = "within", effect = "twoways")
+
+# Extraire les résidus et recalculer le vrai R²
+residuals <- resid(model_4)
+ss_res <- sum(residuals^2)  # Somme des carrés des résidus
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)  # Somme des carrés totaux
+r2_corrected <- 1 - (ss_res / ss_tot)  # Vrai R²
+
+# Obtenir le résumé du modèle sous forme de liste
+summary_model_4 <- summary(model_4)
+
+# Remplacer uniquement R-Squared et laisser Adj. R-Squared inchangé
+summary_model_4$r.squared <- r2_corrected  # Correction du R²
+
+# Forcer l'affichage du résumé modifié
+print(summary_model_4)
+
+```
+
+
+```{r}
+library(plm)
+
+# Transformer en panel avec effets fixes Analyste & Année
+pdata <- pdata.frame(data, index = c("id_analyst", "year"))
+
+# Régression en panel avec AQI et les lags J-1, J-7, J-14 des polluants
+model_5 <- plm(log_error ~
+                        PM2_5_lag1 + PM10_lag1 + NO2_lag1 + SO2_lag1 +
+                        PM2_5_week + PM10_week + NO2_week + SO2_week +
+                        PM2_5_2weeks + PM10_2weeks + NO2_2weeks + SO2_2weeks+ log_gdp + inflation_rate + unemployment_rate, 
+               data = pdata, model = "within", effect = "twoways")
+
+# Extraire les résidus et recalculer le vrai R²
+residuals <- resid(model_5)
+ss_res <- sum(residuals^2)  # Somme des carrés des résidus
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)  # Somme des carrés totaux
+r2_corrected <- 1 - (ss_res / ss_tot)  # Vrai R²
+
+# Obtenir le résumé du modèle sous forme de liste
+summary_model_5 <- summary(model_5)
+
+# Remplacer uniquement R-Squared et laisser Adj. R-Squared inchangé
+summary_model_5$r.squared <- r2_corrected  # Correction du R²
+
+# Forcer l'affichage du résumé modifié
+print(summary_model_5)
+
+```
+
+
+```{r}
+# Charger la bibliothèque
+library(stargazer)
+
+# Définir les effets fixes pour chaque modèle
+fe_labels <- c("Country FE", "Year FE", "Analyst FE")
+
+# Définir les valeurs des effets fixes (correspondant à chaque modèle)
+fe_values <- list(
+  c("NO", "NO", "NO", "NO", "NO"),   # Country FE
+  c("YES", "YES", "YES", "YES", "YES"),  # Year FE (présent dans tous les modèles)
+  c("YES", "YES", "YES", "YES", "YES")   # Analyst FE (présent dans tous les modèles)
+)
+
+# Extraire le R² du modèle 1 (OLS) et les modèles panel
+r2_values <- c(
+  round(summary_model_1$r.squared, 4),  # R² corrigé pour model_1
+  round(summary_model_2$r.squared, 4),  # R² corrigé pour model_2
+  round(summary_model_3$r.squared, 4),  # R² corrigé pour model_3
+  round(summary_model_4$r.squared, 4),  # R² corrigé pour model_4
+  round(summary_model_5$r.squared, 4)   # R² corrigé pour model_5
+)
+
+# Générer le tableau avec stargazer et ajouter les R² recalculés + effets fixes
+stargazer(model_1, model_2, model_3, model_4, model_5, type = "text",
+          title = "Comparaison des modèles économétriques",
+          column.labels = c("Model 1", "Model 2", "Model 3", "Model 4", "Model 5"),
+          align = TRUE,
+          omit.stat = c("rsq"),  # Supprime la ligne "R2"
+          add.lines = list(
+            c("R-Squared", r2_values[1], r2_values[2], r2_values[3], r2_values[4], r2_values[5]),
+            c("Country FE", fe_values[[1]]),  
+            c("Year FE", fe_values[[2]]),  
+            c("Analyst FE", fe_values[[3]])  
+          ))
+
+```
+
+
+
+```{r}
+# Charger la bibliothèque
+library(stargazer)
+
+# Définir les effets fixes pour chaque modèle
+fe_labels <- c("Country FE", "Year FE", "Analyst FE")
+
+fe_values <- list(
+  c("NO", "NO", "NO", "NO", "NO"),   # Country FE
+  c("YES", "YES", "YES", "YES", "YES"),  # Year FE
+  c("YES", "YES", "YES", "YES", "YES")   # Analyst FE
+)
+
+# Extraire les R² corrigés
+r2_values <- c(
+  round(summary_model_1$r.squared, 4),
+  round(summary_model_2$r.squared, 4),
+  round(summary_model_3$r.squared, 4),
+  round(summary_model_4$r.squared, 4),
+  round(summary_model_5$r.squared, 4)
+)
+
+# Exporter les résultats au format HTML
+stargazer(model_1, model_2, model_3, model_4, model_5,
+          type = "html",
+          title = "Comparaison des modèles économétriques",
+          column.labels = c("Model 1", "Model 2", "Model 3", "Model 4", "Model 5"),
+          align = TRUE,
+          omit = c("gdp", "inflation_rate", "unemployment_rate"),  # ⛔️ on les omet
+          omit.stat = c("rsq", "adj.rsq"),
+          add.lines = list(
+            c("R-Squared", r2_values[1], r2_values[2], r2_values[3], r2_values[4], r2_values[5]),
+            c("Controls", "YES", "YES", "YES", "YES", "YES"),  # ✅ ligne ajoutée
+            c("Country FE", fe_values[[1]]),
+            c("Year FE", fe_values[[2]]),
+            c("Analyst FE", fe_values[[3]])
+          ),
+          out = "resultats_stargazer.html")
+
+```
+
+
+#2SLS 
+```{r}
+# Charger les packages nécessaires
+library(haven)      # pour lire les fichiers .dta
+library(dplyr)
+library(AER)        # pour la fonction ivreg (2SLS)
+
+# 1. Importer les deux jeux de données
+halas <- read_dta("C:/Users/HP/OneDrive/Bureau/HALAS Master Thesis/Data/HALASdata.dta")
+pblh <- read_dta("C:/Users/HP/OneDrive/Bureau/HALAS Master Thesis/Data/pblh_aligned.dta")
+
+# 2. Fusionner temporairement les deux bases par date et country
+halas <- halas %>%
+  mutate(date = as.Date(date, origin = "1960-01-01"))
+
+pblh <- pblh %>%
+  mutate(date = as.Date(date, origin = "1960-01-01"))
+
+data_merged <- halas %>%
+  left_join(pblh, by = c("country", "date"))
+
+# 3. Supprimer les lignes manquantes (AQI, PBLH )
+data_merged <- data_merged %>%
+  filter(!is.na(AQI), !is.na(PBLH), !is.na(error))
+```
+
+```{r}
+data_merged$log_error <- log1p(data_merged$error)
+```
+
+```{r}
+data_merged$log_gdp <- log(data_merged$gdp)
+```
+
+
+```{r}
+library(fixest)
+
+model_1_2sls <- feols(
+  log_error ~ 1 | AQI ~ PBLH  ,
+  data = data_merged,
+  fixef = c("year", "id_analyst")
+)
+
+
+# Résumé sans afficher les effets fixes
+summary(model_1_2sls)
+
+```
+
+
+
+```{r}
+model_2_2sls <- feols(
+  log_error ~ log_gdp + inflation_rate + unemployment_rate | 
+          AQI ~ PBLH ,
+  data = data_merged,
+  fixef = c("year", "id_analyst")
+)
+
+summary(model_2_2sls)
+```
+
+
+```{r}
+etable(
+  model_1_2sls,
+  stage = 1:2,
+  dict = c(
+    "AQI" = "Air Quality Index",
+    "log_error" = "Log(Error)",
+    "PBLH" = "Planetary Boundary Layer Height",
+    "log_gdp" = "Log(GDP)",
+    "inflation_rate" = "Inflation Rate",
+    "unemployment_rate" = "Unemployment Rate"
+  ),
+  fitstat = ~ . + ivf,
+  title = "2SLS – Model 1: AQI Instrumented by PBLH with Controls (in 1st stage)",
+  tex = FALSE
+)
+
+```
+
+#AFFICHAGE
+```{r}
+library(fixest)
+library(htmlTable)
+
+# Étape 1 : Créer l'objet etable
+etable_result_1 <- etable(
+  model_1_2sls,
+  stage = 1:2,
+  dict = c(
+    "AQI" = "Air Quality Index",
+    "log_error" = "Log(Error)",
+    "PBLH" = "Planetary Boundary Layer Height",
+    "log_gdp" = "Log(GDP)",
+    "inflation_rate" = "Inflation Rate",
+    "unemployment_rate" = "Unemployment Rate"
+  ),
+  fitstat = ~ . + ivf,
+  tex = FALSE
+)
+
+# Étape 2 : Convertir en data.frame
+etable_df_1 <- as.data.frame(etable_result_1)
+
+# Étape 3 : Générer le code HTML
+html_code_1 <- htmlTable(etable_df_1,
+                         caption = "2SLS – Model 1: AQI Instrumented by PBLH with Controls (in 1st stage)")
+
+# Étape 4 : Sauvegarder dans un fichier HTML
+writeLines(paste0("<html><body>", html_code_1, "</body></html>"), "etable_model1_styled.html")
+
+```
+
+```{r}
+etable(
+  model_2_2sls,
+  stage = 1:2,
+  dict = c(
+    "AQI" = "Air Quality Index",
+    "log_error" = "Log(Error)",
+    "PBLH" = "Planetary Boundary Layer Height",
+    "log_gdp" = "Log(GDP)",
+    "inflation_rate" = "Inflation Rate",
+    "unemployment_rate" = "Unemployment Rate"
+  ),
+  fitstat = ~ . + ivf,
+  title = "2SLS – Model 2: Full Controls in 2nd Stage Only",
+  tex= FALSE
+)
+
+
+```
+#2LS AFFICHER EN HTLM
+```{r}
+library(fixest)
+library(htmlTable)
+
+# Étape 1 : créer l'objet etable
+etable_result <- etable(
+  model_2_2sls,
+  stage = 1:2,
+  dict = c(
+    "AQI" = "Air Quality Index",
+    "log_error" = "Log(Error)",
+    "PBLH" = "Planetary Boundary Layer Height",
+    "log_gdp" = "Log(GDP)",
+    "inflation_rate" = "Inflation Rate",
+    "unemployment_rate" = "Unemployment Rate"
+  ),
+  fitstat = ~ . + ivf,
+  tex = FALSE
+)
+
+# Étape 2 : convertir en data frame (ou matrice) pour htmlTable
+etable_df <- as.data.frame(etable_result)
+
+# Étape 3 : générer le HTML avec un vrai tableau structuré
+html_code <- htmlTable(etable_df, 
+                       caption = "2SLS – Model 2: Full Controls in 2nd Stage Only")
+
+# Étape 4 : écrire dans un fichier HTML complet
+writeLines(paste0("<html><body>", html_code, "</body></html>"), "etable_model2_styled.html")
+
+```
+
+
+
+
+
+
+
+#relation non lineaire 
+```{r}
+# Créer AQI^2 dans tes données
+data <- data %>%
+  mutate(AQI_sq = AQI^2)
+
+# Régression OLS sans constante avec AQI et AQI²
+model_1_nonlinear <- lm(log_error ~ AQI + AQI_sq -1, data = data)
+
+# Résumé des résultats
+summary(model_1_nonlinear)
+
+```
+
+
+```{r}
+
+# 2. Définir les effets fixes Analyste + Année
+pdata <- pdata.frame(data, index = c("id_analyst", "year"))
+
+# 3. Régression avec AQI et AQI², effets fixes Analyste & Year
+model_2_nonlinear <- plm(log_error ~ AQI + AQI_sq ,
+                         data = pdata, model = "within", effect = "twoways")
+
+# 4. Extraire les résidus et recalculer le vrai R²
+residuals <- resid(model_2_nonlinear)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# 5. Résumé et remplacement du R²
+summary_model_2_nonlinear <- summary(model_2_nonlinear)
+summary_model_2_nonlinear$r.squared <- r2_corrected
+
+# 6. Affichage
+print(summary_model_2_nonlinear)
+
+
+```
+
+
+```{r}
+
+# 2. Définir le panel avec effets fixes Analyste + Année
+pdata <- pdata.frame(data, index = c("id_analyst", "year"))
+
+# 3. Régression avec AQI, AQI², et variables de contrôle
+model_3_nonlinear <- plm(log_error ~ AQI + AQI_sq + log_gdp + inflation_rate + unemployment_rate,
+                         data = pdata, model = "within", effect = "twoways")
+
+# 4. Calcul manuel du vrai R²
+residuals <- resid(model_3_nonlinear)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# 5. Résumé et remplacement du R²
+summary_model_3_nonlinear <- summary(model_3_nonlinear)
+summary_model_3_nonlinear$r.squared <- r2_corrected
+
+# 6. Affichage
+print(summary_model_3_nonlinear)
+
+```
+
+
+```{r}
+# Charger la bibliothèque
+library(stargazer)
+
+# Extraire les R² manuellement calculés
+r2_model_1 <- summary(model_1_nonlinear)$r.squared
+r2_model_2 <- summary_model_2_nonlinear$r.squared
+r2_model_3 <- summary_model_3_nonlinear$r.squared
+
+# Créer le tableau stargazer
+stargazer(model_1_nonlinear, model_2_nonlinear, model_3_nonlinear,
+          type = "text",
+          title = "Non-Linearity Test: AQI and AQI² on Forecast Error",
+          column.labels = c("Model 1", "Model 2", "Model 3"),
+          dep.var.labels = "Log(Error)",
+          align = TRUE,
+          omit.stat = c("rsq", "f"),  # on supprime les stats par défaut pour les remplacer
+          add.lines = list(
+            c("R-Squared", round(r2_model_1, 4), round(r2_model_2, 4), round(r2_model_3, 4)),
+            c("Year FE", "NO", "YES", "YES"),
+            c("Analyst FE", "NO", "YES", "YES")
+          ))
+
+```
+
+
+```{r}
+# Exporter le tableau stargazer au format HTML
+stargazer(model_1_nonlinear, model_2_nonlinear, model_3_nonlinear,
+          type = "html",
+          out = "nonlinearity_aqi_models.html",  # nom du fichier HTML
+          title = "Non-Linearity Test: AQI and AQI² on Forecast Error",
+          dep.var.labels = "Log(Error)",
+          align = TRUE,
+          omit = c("gdp", "inflation_rate", "unemployment_rate"),
+          omit.stat = c("rsq", "adj.rsq"),
+          add.lines = list(
+            c("R-Squared", round(r2_model_1, 4), round(r2_model_2, 4), round(r2_model_3, 4)),
+            c("Year FE", "NO", "YES", "YES"),
+            c("Analyst FE", "NO", "YES", "YES"),
+            c("Controls", "NO", "NO", "YES")
+          ))
+
+```
+
+
+#placebot test 
+```{r}
+# Créer une colonne placebo : AQI permuté aléatoirement
+set.seed(123)  # pour reproductibilité
+data_placebo <- data %>%
+  mutate(AQI_placebo = sample(AQI))  # permutation aléatoire
+
+```
+
+
+```{r}
+# 2. Estimer le modèle placebo (sans constante)
+model_1_placebo <- lm(log_error ~ AQI_placebo , data = data_placebo)
+
+# 3. Afficher les résultats
+summary(model_1_placebo)
+```
+
+
+```{r}
+
+# 2. Définir le panel avec effets fixes Country + Year
+pdata_placebo <- pdata.frame(data_placebo, index = c("country", "year"))
+
+# 3. Estimer le modèle placebo avec AQI permuté
+model_2_placebo <- plm(log_error ~ AQI_placebo,
+                       data = pdata_placebo,
+                       model = "within", effect = "twoways")
+
+# 4. Calcul du vrai R²
+residuals <- resid(model_2_placebo)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata_placebo$log_error - mean(pdata_placebo$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# 5. Résumé du modèle
+summary_model_2_placebo <- summary(model_2_placebo)
+summary_model_2_placebo$r.squared <- r2_corrected
+
+# 6. Affichage final
+print(summary_model_2_placebo)
+
+```
+
+
+```{r}
+library(plm)
+library(dplyr)
+
+# 1. Créer une version placebo de AQI
+set.seed(123)  # Pour reproductibilité
+data_placebo <- data %>%
+  mutate(AQI_placebo = sample(AQI))
+
+# 2. Définir le panel avec effets fixes Country + Year
+pdata_placebo <- pdata.frame(data_placebo, index = c("country", "year"))
+
+# 3. Estimer le modèle placebo avec AQI permuté et contrôles
+model_3_placebo <- plm(log_error ~ AQI_placebo + log_gdp + inflation_rate + unemployment_rate,
+                       data = pdata_placebo,
+                       model = "within", effect = "twoways")
+
+# 4. Calcul du vrai R²
+residuals <- resid(model_3_placebo)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata_placebo$log_error - mean(pdata_placebo$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# 5. Résumé du modèle
+summary_model_3_placebo <- summary(model_3_placebo)
+summary_model_3_placebo$r.squared <- r2_corrected
+
+# 6. Affichage final
+print(summary_model_3_placebo)
+
+```
+
+
+```{r}
+# 2. Définir les effets fixes analyste + année
+pdata_placebo <- pdata.frame(data_placebo, index = c("id_analyst", "year"))
+
+# 3. Estimation avec AQI placebo + contrôles
+model_4_placebo <- plm(log_error ~ AQI_placebo + log_gdp + inflation_rate + unemployment_rate,
+                       data = pdata_placebo, model = "within", effect = "twoways")
+
+# 4. Calcul du vrai R²
+residuals <- resid(model_4_placebo)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata_placebo$log_error - mean(pdata_placebo$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# 5. Résumé du modèle et remplacement du R²
+summary_model_4_placebo <- summary(model_4_placebo)
+summary_model_4_placebo$r.squared <- r2_corrected
+
+# 6. Affichage
+print(summary_model_4_placebo)
+```
+
+
+```{r}
+# Charger la bibliothèque
+library(stargazer)
+
+# Récupérer les R² manuellement calculés
+r2_model_1 <- summary(model_1_placebo)$r.squared
+r2_model_2 <- summary_model_2_placebo$r.squared
+r2_model_3 <- summary_model_3_placebo$r.squared
+r2_model_4 <- summary_model_4_placebo$r.squared
+
+# Générer le tableau stargazer
+stargazer(model_1_placebo, model_2_placebo, model_3_placebo, model_4_placebo,
+          type = "text",
+          title = "Placebo Test: Randomized AQI Effect on Forecast Error",
+          column.labels = c("Model 1", "Model 2", "Model 3", "Model 4"),
+          dep.var.labels = "Log(Error)",
+          align = TRUE,
+          omit.stat = c("rsq", "f"),
+          add.lines = list(
+            c("R-Squared (manual)", round(r2_model_1, 4), round(r2_model_2, 4), round(r2_model_3, 4), round(r2_model_4, 4)),
+            c("Year FE", "NO", "YES", "YES", "YES"),
+            c("Country FE", "NO", "YES", "YES", "NO"),
+            c("Analyst FE", "NO", "NO", "NO", "YES")
+          ))
+
+```
+
+
+```{r}
+# Exporter le tableau stargazer au format HTML
+stargazer(model_1_placebo, model_2_placebo, model_3_placebo, model_4_placebo,
+          type = "html",
+          out = "placebo_models_results.html",  # nom du fichier de sortie
+          title = "Placebo Test: Randomized AQI Effect on Forecast Error",
+          column.labels = c("Model 1", "Model 2", "Model 3", "Model 4"),
+          dep.var.labels = "Log(Error)",
+          align = TRUE,
+          omit.stat = c("rsq",  "adj.rsq","f"),
+          omit = "Constant", 
+          add.lines = list(
+            c("R-Squared", round(r2_model_1, 4), round(r2_model_2, 4), round(r2_model_3, 4), round(r2_model_4, 4)),
+            c("Year FE", "NO", "YES", "YES", "YES"),
+            c("Country FE", "NO", "YES", "YES", "NO"),
+            c("Analyst FE", "NO", "NO", "NO", "YES")
+          ))
+
+```
+
+
+
+
+
+#placebo test avec les retards#################################### 
+```{r}
+
+
+# 2. Définir le panel avec effets fixes Analyste + Année
+pdata_placebo <- pdata.frame(data_placebo, index = c("id_analyst", "year"))
+
+# 3. Estimer le modèle placebo
+model_1_placebo_panel <- plm(log_error ~ AQI_placebo,
+                             data = pdata_placebo,
+                             model = "within", effect = "twoways")
+
+# 4. Calcul du vrai R²
+residuals <- resid(model_1_placebo_panel)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata_placebo$log_error - mean(pdata_placebo$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# 5. Résumé du modèle et remplacement du R²
+summary_model_1_placebo_panel <- summary(model_1_placebo_panel)
+summary_model_1_placebo_panel$r.squared <- r2_corrected
+
+# 6. Affichage final
+print(summary_model_1_placebo_panel)
+
+```
+
+```{r}
+# 2. Définir le panel avec effets fixes Analyste + Année
+pdata_placebo <- pdata.frame(data_placebo, index = c("id_analyst", "year"))
+
+# 3. Estimer le modèle avec AQI_placebo + tous les lags des polluants
+model_5_placebo <- plm(log_error ~ AQI_placebo +
+                          PM2_5_lag1 + PM10_lag1 + NO2_lag1 + SO2_lag1 +
+                          PM2_5_week + PM10_week + NO2_week + SO2_week +
+                          PM2_5_2weeks + PM10_2weeks + NO2_2weeks + SO2_2weeks,
+                       data = pdata_placebo,
+                       model = "within", effect = "twoways")
+
+# 4. Calcul du vrai R²
+residuals <- resid(model_5_placebo)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata_placebo$log_error - mean(pdata_placebo$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# 5. Résumé du modèle et mise à jour du R²
+summary_model_5_placebo <- summary(model_5_placebo)
+summary_model_5_placebo$r.squared <- r2_corrected
+
+# 6. Affichage
+print(summary_model_5_placebo)
+
+```
+
+
+
+
+#relation non lineraire dans placebo
+```{r}
+# 1. Créer une version placebo de AQI
+set.seed(123)  # Pour reproductibilité
+data_placebo <- data %>%
+  mutate(AQI_placebo = sample(AQI),
+         AQI_placebo_sq = AQI_placebo^2)
+
+# 2. Régression OLS sans constante avec AQI_placebo et AQI_placebo²
+model_1_nonlinear_placebo <- lm(log_error ~ AQI_placebo + AQI_placebo_sq - 1, data = data_placebo)
+
+# 3. Résumé du modèle
+summary(model_1_nonlinear_placebo)
+
+```
+
+
+```{r}
+
+# 2. Créer le panel avec effets fixes Analyste + Année
+pdata_placebo <- pdata.frame(data_placebo, index = c("id_analyst", "year"))
+
+# 3. Régression avec AQI_placebo et AQI_placebo²
+model_2_nonlinear_placebo <- plm(log_error ~ AQI_placebo + AQI_placebo_sq,
+                                 data = pdata_placebo,
+                                 model = "within", effect = "twoways")
+
+# 4. Calcul du vrai R²
+residuals <- resid(model_2_nonlinear_placebo)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata_placebo$log_error - mean(pdata_placebo$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# 5. Résumé et remplacement du R²
+summary_model_2_nonlinear_placebo <- summary(model_2_nonlinear_placebo)
+summary_model_2_nonlinear_placebo$r.squared <- r2_corrected
+
+# 6. Affichage
+print(summary_model_2_nonlinear_placebo)
+
+```
+
+
+```{r}
+# 2. Définir le panel avec effets fixes Analyste + Année
+pdata_placebo <- pdata.frame(data_placebo, index = c("id_analyst", "year"))
+
+# 3. Estimer le modèle placebo avec AQI permuté, AQI² et les variables de contrôle
+model_3_nonlinear_placebo <- plm(
+  log_error ~ AQI_placebo + AQI_placebo_sq + log_gdp + inflation_rate + unemployment_rate,
+  data = pdata_placebo,
+  model = "within", effect = "twoways"
+)
+
+# 4. Calcul du vrai R²
+residuals <- resid(model_3_nonlinear_placebo)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata_placebo$log_error - mean(pdata_placebo$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# 5. Résumé et remplacement du R²
+summary_model_3_nonlinear_placebo <- summary(model_3_nonlinear_placebo)
+summary_model_3_nonlinear_placebo$r.squared <- r2_corrected
+
+# 6. Affichage
+print(summary_model_3_nonlinear_placebo)
+
+```
+
+
+```{r}
+library(stargazer)
+
+# Extraire les vrais R² calculés
+r2_model_1 <- summary(model_1_nonlinear_placebo)$r.squared
+r2_model_2 <- summary_model_2_nonlinear_placebo$r.squared
+r2_model_3 <- summary_model_3_nonlinear_placebo$r.squared
+
+# Afficher les résultats avec stargazer
+stargazer(model_1_nonlinear_placebo, model_2_nonlinear_placebo, model_3_nonlinear_placebo,
+          type = "text",
+          title = "Placebo Test (Non-Linear): Randomized AQI and AQI²",
+          column.labels = c("Model 1", "Model 2", "Model 3"),
+          dep.var.labels = "log(Error)",
+          align = TRUE,
+          omit.stat = c("rsq"),
+          add.lines = list(
+            c("R-Squared (manual)", round(r2_model_1, 4), round(r2_model_2, 4), round(r2_model_3, 4)),
+            c("Year FE", "NO", "YES", "YES"),
+            c("Analyst FE", "NO", "YES", "YES")
+          ))
+
+```
+
+
+```{r}
+# Exporter le tableau au format HTML
+stargazer(model_1_nonlinear_placebo, model_2_nonlinear_placebo, model_3_nonlinear_placebo,
+          type = "html",
+          out = "placebo_nonlinear_models.html",
+          title = "Placebo Test (Non-Linear): Randomized AQI and AQI²",
+          column.labels = c("Model 1", "Model 2", "Model 3"),
+          dep.var.labels = "log(Error)",
+          align = TRUE,
+          omit.stat = c("rsq", "adj.rsq"),
+          add.lines = list(
+            c("R-Squared ", round(r2_model_1, 4), round(r2_model_2, 4), round(r2_model_3, 4)),
+            c("Year FE", "NO", "YES", "YES"),
+            c("Analyst FE", "NO", "YES", "YES")
+          ))
+
+```
+
+
+
+
+
+
+#test de lead 
+```{r}
+# Transformer en panel avec effets fixes Analyste & Année
+pdata <- pdata.frame(data, index = c("id_analyst", "year"))
+
+# Régression en panel avec AQI_lead1 + variables de contrôle
+model_aqi_lead1 <- plm(log_error ~ AQI_lead1 + gdp + inflation_rate + unemployment_rate, 
+                       data = pdata, model = "within", effect = "twoways")
+
+# Calcul du vrai R²
+residuals <- resid(model_aqi_lead1)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# Résumé
+summary_model_aqi_lead1 <- summary(model_aqi_lead1)
+summary_model_aqi_lead1$r.squared <- r2_corrected
+
+# Affichage
+print(summary_model_aqi_lead1)
+
+
+```
+
+```{r}
+library(plm)
+
+# Créer le panel Analyste + Année
+pdata <- pdata.frame(data, index = c("id_analyst", "year"))
+
+# Régression avec AQI_lead7 et variables de contrôle
+model_aqi_lead7 <- plm(
+  log_error ~ AQI_lead7 + gdp + inflation_rate + unemployment_rate,
+  data = pdata,
+  model = "within", effect = "twoways"
+)
+
+# Calcul du vrai R²
+residuals <- resid(model_aqi_lead7)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# Résumé + remplacement R²
+summary_model_aqi_lead7 <- summary(model_aqi_lead7)
+summary_model_aqi_lead7$r.squared <- r2_corrected
+
+# Affichage
+print(summary_model_aqi_lead7)
+
+```
+
+```{r}
+# Régression avec AQI_lead14 et variables de contrôle
+model_aqi_lead14 <- plm(
+  log_error ~ AQI_lead14 + gdp + inflation_rate + unemployment_rate,
+  data = pdata,
+  model = "within", effect = "twoways"
+)
+
+# Calcul du vrai R²
+residuals <- resid(model_aqi_lead14)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# Résumé + remplacement R²
+summary_model_aqi_lead14 <- summary(model_aqi_lead14)
+summary_model_aqi_lead14$r.squared <- r2_corrected
+
+# Affichage
+print(summary_model_aqi_lead14)
+
+
+```
+
+```{r}
+library(plm)
+
+# Panel avec effets fixes Analyste + Année
+pdata <- pdata.frame(data, index = c("id_analyst", "year"))
+
+# Modèle avec toutes les valeurs futures de AQI (J+1, J+7, J+14)
+model_aqi_leads <- plm(
+  log_error ~ AQI_lead1 + AQI_lead7 + AQI_lead14 +
+    gdp + inflation_rate + unemployment_rate,
+  data = pdata,
+  model = "within",
+  effect = "twoways"
+)
+
+# Calcul du vrai R²
+residuals <- resid(model_aqi_leads)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# Résumé et affichage
+summary_model_aqi_leads <- summary(model_aqi_leads)
+summary_model_aqi_leads$r.squared <- r2_corrected
+
+print(summary_model_aqi_leads)
+
+
+```
+
+```{r}
+# Charger la bibliothèque
+library(stargazer)
+
+# Extraire les R² recalculés
+r2_values <- c(
+  as.character(round(summary_model_aqi_lead1$r.squared, 4)),
+  as.character(round(summary_model_aqi_lead7$r.squared, 4)),
+  as.character(round(summary_model_aqi_lead14$r.squared, 4)),
+  as.character(round(summary_model_aqi_leads$r.squared, 4))
+)
+
+# Affichage du tableau comparatif
+stargazer(
+  model_aqi_lead1,
+  model_aqi_lead7,
+  model_aqi_lead14,
+  model_aqi_leads,
+  type = "text",  # change to "html" if you want export
+  title = "Forecast Error and Future AQI: Reverse Causality Test",
+  column.labels = c("AQI Lead 1", "AQI Lead 7", "AQI Lead 14", "All AQI Leads"),
+  dep.var.labels = "Log(Forecast Error)",
+  align = TRUE,
+  omit = c("gdp", "inflation_rate", "unemployment_rate"),
+  omit.stat = c("rsq", "f"),
+  add.lines = list(
+    c("R-Squared (manual)", r2_values),
+    c("Year FE", "YES", "YES", "YES", "YES"),
+    c("Analyst FE", "YES", "YES", "YES", "YES"),
+    c("Controls", "YES", "YES", "YES", "YES"),
+    c("Lead Type", "J+1", "J+7", "J+14", "J+1 + J+7 + J+14")
+  )
+)
+
+```
+
+```{r}
+stargazer(
+  model_aqi_lead1,
+  model_aqi_lead7,
+  model_aqi_lead14,
+  model_aqi_leads,
+  type = "html",
+  out = "aqi_leads_models.html",
+  title = "Forecast Error and Future AQI: Reverse Causality Test",
+  column.labels = c("AQI Lead 1", "AQI Lead 7", "AQI Lead 14", "All AQI Leads"),
+  dep.var.labels = "Log(Forecast Error)",
+  align = TRUE,
+  omit = c("gdp", "inflation_rate", "unemployment_rate"),
+  omit.stat = c("rsq", "f"),
+  add.lines = list(
+    c("R-Squared (manual)", r2_values),
+    c("Year FE", "YES", "YES", "YES", "YES"),
+    c("Analyst FE", "YES", "YES", "YES", "YES"),
+    c("Controls", "YES", "YES", "YES", "YES"),
+    c("Lead Type", "J+1", "J+7", "J+14", "J+1 + J+7 + J+14")
+  )
+)
+```
+
+
+
+
+#effets country et saison 
+```{r}
+# Extraire le mois
+data$month <- format(data$date, "%m")
+
+# Créer une variable saison
+data$season <- with(data, ifelse(month %in% c("12", "01", "02"), "Winter",
+                          ifelse(month %in% c("03", "04", "05"), "Spring",
+                          ifelse(month %in% c("06", "07", "08"), "Summer",
+                          "Autumn"))))
+
+# Transformer en facteur
+data$season <- as.factor(data$season)
+
+```
+
+
+```{r}
+library(plm)
+
+# Créer le panel avec index pays + saison
+pdata <- pdata.frame(data, index = c("country", "season"))
+
+# Régression en panel avec effets fixes sur country + season
+model_country_season <- plm(
+  log_error ~ AQI + log_gdp + inflation_rate + unemployment_rate,
+  data = pdata,
+  model = "within",
+  effect = "twoways"  # effets fixes sur les 2 dimensions du panel
+)
+
+# Calcul manuel du R²
+residuals <- resid(model_country_season)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# Résumé + remplacement R²
+summary_model_country_season <- summary(model_country_season)
+summary_model_country_season$r.squared <- r2_corrected
+
+# Affichage
+print(summary_model_country_season)
+
+```
+
+```{r}
+library(plm)
+
+# S'assurer que 'season' est bien un facteur
+data$season <- as.factor(data$season)
+
+# Créer le panel avec effets fixes country + season
+pdata <- pdata.frame(data, index = c("country", "season"))
+
+# Régression avec les lags (J-1, J-7, J-14) des 4 polluants + contrôles
+model_5_season <- plm(
+  log_error ~
+    PM2_5_lag1 + PM10_lag1 + NO2_lag1 + SO2_lag1 +
+    PM2_5_week + PM10_week + NO2_week + SO2_week +
+    PM2_5_2weeks + PM10_2weeks + NO2_2weeks + SO2_2weeks +
+    log_gdp + inflation_rate + unemployment_rate,
+  data = pdata,
+  model = "within",
+  effect = "twoways"  # effets fixes pays + saison
+)
+
+# Calcul du vrai R²
+residuals <- resid(model_5_season)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# Résumé + modification du R²
+summary_model_5_season <- summary(model_5_season)
+summary_model_5_season$r.squared <- r2_corrected
+
+# Affichage
+print(summary_model_5_season)
+
+```
+
+```{r}
+library(plm)
+
+# Définir le panel avec effets fixes country + season
+pdata <- pdata.frame(data, index = c("country", "season"))
+
+# Régression avec AQI, AQI² et variables de contrôle
+model_3_nonlinear_season <- plm(
+  log_error ~ AQI + AQI_sq + log_gdp + inflation_rate + unemployment_rate,
+  data = pdata,
+  model = "within",
+  effect = "twoways"  # effets fixes sur country et season
+)
+
+# Calcul manuel du vrai R²
+residuals <- resid(model_3_nonlinear_season)
+ss_res <- sum(residuals^2)
+ss_tot <- sum((pdata$log_error - mean(pdata$log_error))^2)
+r2_corrected <- 1 - (ss_res / ss_tot)
+
+# Résumé + modification R²
+summary_model_3_nonlinear_season <- summary(model_3_nonlinear_season)
+summary_model_3_nonlinear_season$r.squared <- r2_corrected
+
+# Affichage
+print(summary_model_3_nonlinear_season)
+
+```
+```{r}
+library(stargazer)
+
+# Extraire les R² manuellement corrigés en chaîne de caractères
+r2_values <- c(
+  as.character(round(summary_model_country_season$r.squared, 4)),
+  as.character(round(summary_model_5_season$r.squared, 4)),
+  as.character(round(summary_model_3_nonlinear_season$r.squared, 4))
+)
+
+# Afficher les résultats dans un tableau Stargazer
+stargazer(
+  model_country_season,
+  model_5_season,
+  model_3_nonlinear_season,
+  type = "text",  # ou "html" pour exporter
+  title = "Panel Models with Country & Season Fixed Effects",
+  column.labels = c("AQI Only", "Lags of Pollutants", "AQI + AQI²"),
+  dep.var.labels = "Log(Error)",
+  align = TRUE,
+  omit = c("gdp", "inflation_rate", "unemployment_rate"),  # pour alléger le tableau
+  omit.stat = c("rsq", "f"),
+  add.lines = list(
+    c("R-Squared (manual)", r2_values),
+    c("Country FE", "YES", "YES", "YES"),
+    c("Season FE", "YES", "YES", "YES"),
+    c("Controls", "YES", "YES", "YES")
+  )
+)
+
+```
+
+
+```{r}
+stargazer(
+  model_country_season,
+  model_5_season,
+  model_3_nonlinear_season,
+  type = "html",
+  out = "models_country_season.html",
+  title = "Panel Models with Country & Season Fixed Effects",
+  column.labels = c("AQI Only", "Lags of Pollutants", "AQI + AQI²"),
+  dep.var.labels = "Log(Error)",
+  align = TRUE,
+  omit = c("gdp", "inflation_rate", "unemployment_rate"),  # pour alléger le tableau
+  omit.stat = c("rsq","adj.rsq", "f"),
+  add.lines = list(
+    c("R-Squared", r2_values),
+    c("Country FE", "YES", "YES", "YES"),
+    c("Season FE", "YES", "YES", "YES"),
+    c("Controls", "YES", "YES", "YES")
+  )
+)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+
+```
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

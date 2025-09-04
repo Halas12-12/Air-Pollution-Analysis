@@ -1,0 +1,1065 @@
+---
+title: "Masther Thesis HALAS"
+author: "ASSOUMA ALASSANE Hariph"
+date: "2025-03-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+install.packages("forecast")
+
+
+```
+
+
+```{r}
+
+# Charger les packages après l'installation
+library(dtplyr)
+library(tidyverse)
+library(lubridate)
+library(haven)
+library(plm)
+library(stargazer)
+library(plot3D)
+library(plotrix)
+library(ggplot2)
+library(viridis)
+library(lmtest)    # Pour les tests statistiques
+library(sandwich)  # Pour corriger l'hétéroscédasticité
+library(knitr)       # Alternative pour affichage propre
+library(kableExtra)  # Pour styliser le tableau
+
+```
+
+
+
+```{r}
+# Charger la base HALASdata.dta
+data <- read_dta("C:/Users/HP/OneDrive/Bureau/HALAS Master Thesis/Data/HALASdata.dta")
+```
+
+```{r}
+# Vérification des valeurs manquantes
+summary(data)
+```
+```{r}
+str(data)
+```
+```{r}
+sapply(data, function(x) sum(is.na(x)))
+```
+
+```{r}
+# Sélection des variables principales et retardées
+vars <- c("error", "AQI", "NO2", "PM10", "PM2_5", "SO2",
+          "NO2_lag1", "PM10_lag1", "PM2_5_lag1", "SO2_lag1",
+          "NO2_week", "PM10_week", "PM2_5_week", "SO2_week",
+          "NO2_2weeks", "PM10_2weeks", "PM2_5_2weeks", "SO2_2weeks",
+          "gdp", "inflation_rate", "unemployment_rate")
+
+# Filtrage des colonnes souhaitées
+data_subset <- data %>%
+  select(all_of(vars))  # Sélectionne uniquement ces colonnes
+
+# Création d'un tableau descriptif
+summary_table <- data_subset %>%
+  summarise_all(list(
+    Moyenne = mean, 
+    Médiane = median, 
+    Ecart_Type = sd, 
+    Min = min, 
+    Max = max, 
+    Obs = ~sum(!is.na(.))
+  ))
+
+# Affichage avec kable
+summary_table %>%
+  t() %>%  # Transpose le tableau pour meilleure lisibilité
+  as.data.frame() %>%
+  kable(format = "html", digits = 2, caption = "Tableau des Statistiques Descriptives") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+```
+```{r}
+
+```
+
+```{r}
+# Vérifier le nombre de valeurs NA dans chaque colonne
+colSums(is.na(data))
+
+
+```
+
+```{r}
+# Agréger l'AQI par pays
+aqi_par_pays <- data %>%
+  group_by(country, country_name) %>%
+  summarize(
+    mean_AQI = mean(AQI, na.rm = TRUE),
+    median_AQI = median(AQI, na.rm = TRUE),
+    nb_obs = n()
+  )
+
+# Afficher le tableau agrégé
+print(aqi_par_pays)
+```
+
+```{r}
+# Convertir la variable date (en supposant qu'elle est au format Stata %td)
+data <- data %>%
+  mutate(date = as.Date(date, origin = "1960-01-01"),
+         year = year(date))
+
+```
+
+```{r}
+
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# 1. Aggregate pollutants and AQI by year
+yearly_pollutants <- data %>%
+  group_by(year) %>%
+  summarize(
+    mean_NO2   = mean(NO2, na.rm = TRUE),
+    mean_PM10  = mean(PM10, na.rm = TRUE),
+    mean_SO2   = mean(SO2, na.rm = TRUE),
+    mean_PM2_5 = mean(PM2_5, na.rm = TRUE),
+    mean_AQI   = mean(AQI, na.rm = TRUE)
+  )
+
+# 2. Reshape to long format for plotting
+yearly_pollutants_long <- yearly_pollutants %>%
+  pivot_longer(
+    cols = starts_with("mean_"),
+    names_to = "pollutant",
+    values_to = "mean_value"
+  ) %>%
+  mutate(
+    pollutant = dplyr::recode(pollutant,
+                              "mean_NO2"   = "NO2",
+                              "mean_PM10"  = "PM10",
+                              "mean_SO2"   = "SO2",
+                              "mean_PM2_5" = "PM2.5",
+                              "mean_AQI"   = "AQI")
+  )
+
+# 3. Plot the trends using ggplot2
+ggplot(yearly_pollutants_long,
+       aes(x = factor(year), y = mean_value, group = pollutant, color = pollutant)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  labs(title = "Annual Trends in Average Pollution Levels",
+       x = "Year",
+       y = "Average Concentration (µg/m³)",
+       color = "Pollutants") +
+  theme_minimal(base_size = 14) +
+  scale_color_manual(values = c("NO2" = "blue", "PM10" = "red", "SO2" = "green",
+                                "PM2.5" = "purple", "AQI" = "orange"))
+
+```
+```{r}
+# Filtrer pour les pays d'intérêt (codes ISO : FR, DE, GB, CH)
+countries_interest <- c("FR", "DE", "GB", "CH")
+data_filtered <- data %>% filter(country %in% countries_interest)
+
+# Agréger les polluants par pays et par année en calculant la moyenne
+yearly_pollutants <- data_filtered %>% 
+  group_by(country, year) %>% 
+  summarize(
+    mean_NO2   = mean(NO2, na.rm = TRUE),
+    mean_PM10  = mean(PM10, na.rm = TRUE),
+    mean_SO2   = mean(SO2, na.rm = TRUE),
+    mean_PM2_5 = mean(PM2_5, na.rm = TRUE)
+  ) %>% 
+  ungroup()
+
+# Transformer les données en format long
+yearly_pollutants_long <- yearly_pollutants %>%
+  pivot_longer(
+    cols = starts_with("mean_"),
+    names_to = "polluant",
+    values_to = "mean_value"
+  ) %>%
+  mutate(
+    polluant = dplyr::recode(polluant,
+                             "mean_NO2"   = "NO2",
+                             "mean_PM10"  = "PM10",
+                             "mean_SO2"   = "SO2",
+                             "mean_PM2_5" = "PM2.5")
+  )
+
+# Visualiser l'évolution des polluants avec facettes
+ggplot(yearly_pollutants_long, 
+       aes(x = factor(year), y = mean_value, group = polluant, color = polluant)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  labs(title = "Trends in Pollutant Levels by Country",
+       x = "Year",
+       y = "Average Concentration (µg/m³)",
+       color = "Pollutants") +
+  facet_wrap(~ country, ncol = 2) +
+  theme_minimal(base_size = 10) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5)) +
+  scale_color_manual(values = c("NO2" = "blue", "PM10" = "red", "SO2" = "green", "PM2.5" = "purple"))
+
+
+```
+
+
+```{r}
+# Agréger l'AQI par année (par exemple, en calculant l'AQI moyen)
+yearly_aqi <- data %>% 
+  group_by(year) %>% 
+  summarize(mean_AQI = mean(AQI, na.rm = TRUE))
+
+# Créer le graphique en barres avec de l'espace entre les barres
+ggplot(yearly_aqi, aes(x = factor(year), y = mean_AQI)) +
+  geom_bar(stat = "identity", width = 0.7, fill = viridis(1), color = "black") +
+  labs(title = "Evolution of AQI in Europe",
+       x = "Year",
+       y = "Average AQI") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+
+```
+```{r}
+# Filtrer pour les pays d'intérêt (France, Allemagne, Royaume-Uni, Suisse)
+# Assumons que les codes ISO sont "FR", "DE", "GB" et "CH"
+countries_interest <- c("FR", "DE", "GB", "CH")
+data_filtered <- data %>% filter(country %in% countries_interest)
+
+# Agréger l'AQI par année pour chaque pays
+yearly_aqi <- data_filtered %>%
+  group_by(country, year) %>%
+  summarize(mean_AQI = mean(AQI, na.rm = TRUE)) %>%
+  ungroup()
+
+# Créer un graphique en barres avec facettes (une facette par pays)
+ggplot(yearly_aqi, aes(x = factor(year), y = mean_AQI, fill = country)) +
+  geom_bar(stat = "identity", width = 0.7, color = "black") +
+  scale_fill_viridis_d(option = "magma") +
+  labs(title = "Trends in AQI for France, Germany, UK, and Switzerland",
+       x = "Year",
+       y = "Average AQI") +
+  facet_wrap(~ country, ncol = 2) +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        legend.position = "none")
+
+```
+```{r}
+library(dplyr)
+library(lubridate)
+
+# Sélectionner uniquement les 4 pays
+countries_interest <- c("FR", "DE", "CH", "GB")  # Codes ISO
+data_filtered <- data %>%
+  filter(country %in% countries_interest) %>%
+  mutate(month = month(date, label = TRUE),  # Extraire le mois
+         year = year(date))  # Extraire l'année
+
+```
+
+
+```{r}
+library(ggplot2)
+
+# Calculate monthly average AQI per country
+monthly_avg <- data_filtered %>%
+  group_by(country, month) %>%
+  summarize(mean_AQI = mean(AQI, na.rm = TRUE))
+
+# Seasonality plot
+ggplot(monthly_avg, aes(x = month, y = mean_AQI, group = country, color = country)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  labs(title = "AQI Seasonality ",
+       x = "Month",
+       y = "Average AQI",
+       color = "Country") +
+  theme_minimal() +
+  scale_x_discrete(labels = month.abb)  # Display abbreviated month names
+
+
+```
+
+
+```{r}
+library(forecast)
+
+# Boucle pour décomposer l'AQI de chaque pays
+for (ctry in countries_interest) {
+  print(paste("Décomposition STL pour", ctry))
+  
+  # Filtrer les données par pays
+  country_data <- data_filtered %>%
+    filter(country == ctry) %>%
+    arrange(date)
+  
+  # Convertir en série temporelle (fréquence 12 car données mensuelles)
+  ts_data <- ts(country_data$AQI, start = c(min(country_data$year)), frequency = 12)
+  
+  # Appliquer la décomposition STL
+  decomposed <- stl(ts_data, s.window = "periodic")
+  
+  # Afficher la décomposition
+  plot(decomposed, main = paste("Décomposition STL -", ctry))
+}
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+
+# Ajouter une colonne mois et année
+data <- data %>%
+  mutate(month = month(date, label = TRUE),  # Extrait le mois sous forme de facteur (Jan, Feb, ...)
+         year = year(date))  # Extrait l'année
+
+# Calculer la moyenne mensuelle des polluants
+monthly_avg <- data %>%
+  group_by(month) %>%
+  summarize(mean_AQI = mean(AQI, na.rm = TRUE),
+            mean_NO2 = mean(NO2, na.rm = TRUE),
+            mean_PM10 = mean(PM10, na.rm = TRUE),
+            mean_PM2_5 = mean(PM2_5, na.rm = TRUE),
+            mean_SO2 = mean(SO2, na.rm = TRUE))
+
+# Visualiser la saisonnalité avec ggplot
+ggplot(monthly_avg, aes(x = month)) +
+  geom_line(aes(y = mean_AQI, group = 1, color = "AQI"), size = 1.2) +
+  geom_line(aes(y = mean_NO2, group = 1, color = "NO2"), size = 1.2) +
+  geom_line(aes(y = mean_PM10, group = 1, color = "PM10"), size = 1.2) +
+  geom_line(aes(y = mean_PM2_5, group = 1, color = "PM2.5"), size = 1.2) +
+  geom_line(aes(y = mean_SO2, group = 1, color = "SO2"), size = 1.2) +
+  labs(title = "Saisonnalité des Polluants Atmosphériques",
+       x = "Mois",
+       y = "Concentration Moyenne (µg/m³)",
+       color = "Polluant") +
+  theme_minimal() +
+  scale_color_manual(values = c("AQI" = "black", "NO2" = "blue", "PM10" = "red", "PM2.5" = "purple", "SO2" = "green"))
+
+```
+```{r}
+library(forecast)
+
+# Conversion en série temporelle (fréquence = 12 car données mensuelles)
+data_ts <- ts(data$AQI, start = c(min(data$year)), frequency = 12)
+
+# Décomposer la série
+decomposed_ts <- stl(data_ts, s.window = "periodic")
+
+# Afficher la décomposition
+plot(decomposed_ts)
+
+```
+```{r}
+kruskal.test(AQI ~ month, data = data)
+
+```
+```{r}
+par(mfrow=c(2,2))  # Afficher 4 graphiques (1 par pays)
+
+# Boucle pour tracer les ACF de chaque pays
+for (ctry in countries_interest) {
+  country_data <- data_filtered %>%
+    filter(country == ctry) %>%
+    arrange(date)
+  
+  # Vérifier qu'il y a assez de données
+  if (nrow(country_data) > 12) {
+    acf(country_data$AQI, main = paste("Autocorrelation AQI -", ctry))
+  } else {
+    print(paste("Pas assez de données pour", ctry))
+  }
+}
+
+
+```
+```{r}
+library(tseries)
+adf.test(data$AQI, alternative = "stationary")
+
+```
+Si p > 0.05, la série n'est pas stationnaire et contient une tendance à long terme.
+
+
+
+
+```{r}
+# Créer des intervalles (bins) pour l'AQI ; ajustez la largeur des bins selon vos besoins
+data <- data %>%
+  mutate(AQI_bin = cut(AQI, breaks = seq(0, max(AQI, na.rm = TRUE), by = 5), 
+                       include.lowest = TRUE, right = FALSE))
+
+# Créer le tableau de fréquences
+table_AQI <- table(data$AQI_bin)
+print(table_AQI)
+```
+
+```{r}
+# Calcul du binwidth en utilisant les min et max de AQI et en divisant par 20 bins
+bin_width <- (max(data$AQI, na.rm = TRUE) - min(data$AQI, na.rm = TRUE)) / 20
+
+# Création de l'histogramme avec des espaces entre les barres
+ggplot(data, aes(x = AQI)) +
+  geom_histogram(aes(fill = ..count..), 
+                 binwidth = bin_width, 
+                 width = bin_width * 0.9,  # 90% of the width, so 10% spacing
+                 color = "black", 
+                 alpha = 0.9) +
+  scale_fill_viridis_c(option = "magma") +
+  labs(title = "Histogram of AQI",
+       x = "AQI",
+       y = "Frequency") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "none"
+  )
+
+```
+```{r}
+ggplot(data, aes(y = AQI)) +
+  geom_boxplot(fill = "cyan", alpha = 0.5) +
+  labs(title = "Boxplot of AQI", y = "AQI Index") +
+  theme_minimal()
+
+```
+
+
+```{r}
+# Charger les bibliothèques nécessaires
+library(dplyr)
+library(ggplot2)
+
+# Calcul du binwidth pour une meilleure visualisation
+bin_width <- (max(data$error, na.rm = TRUE) - min(data$error, na.rm = TRUE)) / 20
+
+# Création de l'histogramme
+ggplot(data, aes(x = error)) +
+  geom_histogram(aes(fill = ..count..), 
+                 binwidth = bin_width, 
+                 width = bin_width * 0.9,  # 90% de la largeur pour un léger espacement
+                 color = "black", 
+                 alpha = 0.9) +
+  scale_fill_viridis_c(option = "magma") +
+  labs(title = "Histogramme de l'Erreur de Prévision",
+       x = "Erreur de prévision",
+       y = "Fréquence") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "none"
+  )
+
+```
+
+```{r}
+# Charger les bibliothèques nécessaires
+library(dplyr)
+library(ggplot2)
+
+# Appliquer la transformation logarithmique (ajout de 1 pour éviter log(0))
+data <- data %>%
+  mutate(log_error = log(error + 1))
+
+# Calcul du binwidth pour une meilleure visualisation
+bin_width <- (max(data$log_error, na.rm = TRUE) - min(data$log_error, na.rm = TRUE)) / 20
+
+# Création de l'histogramme
+ggplot(data, aes(x = log_error)) +
+  geom_histogram(aes(fill = ..count..), 
+                 binwidth = bin_width, 
+                 width = bin_width * 0.9,  # 90% de la largeur pour un léger espacement
+                 color = "black", 
+                 alpha = 0.9) +
+  scale_fill_viridis_c(option = "magma") +
+  labs(title = "Histogram of Forecast error ",
+       x = "Log( Error)",
+       y = "Frequency") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "none"
+  )
+
+
+```
+
+```{r}
+# Charger ggplot2
+library(ggplot2)
+
+# Calcul du binwidth pour PM2.5 (20 bins)
+bin_width_pm25 <- (max(data$PM2_5, na.rm = TRUE) - min(data$PM2_5, na.rm = TRUE)) / 20
+
+# Création de l'histogramme de PM2.5 avec des espaces entre les barres
+ggplot(data, aes(x = PM2_5)) +
+  geom_histogram(aes(fill = ..count..), 
+                 binwidth = bin_width_pm25, 
+                 width = bin_width_pm25 * 0.9,  # 90% de la largeur, donc 10% d'espace
+                 color = "black", 
+                 alpha = 0.9) +
+  scale_fill_viridis_c(option = "magma") +
+  labs(title = "Histogram of PM2.5",
+       x = "PM2.5 (µg/m³)",
+       y = "Frequency") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "none"
+  )
+
+```
+```{r}
+# Création de la courbe de densité pour PM2.5
+ggplot(data, aes(x = PM2_5)) +
+  geom_density(fill = "blue", alpha = 0.4, color = "black", size = 1) +
+  labs(title = "Courbe de Densité de PM2.5",
+       x = "PM2.5 (µg/m³)",
+       y = "Densité") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold")
+  )
+```
+```{r}
+# Charger ggplot2
+library(ggplot2)
+
+# Calcul du binwidth pour PM2.5 (20 bins)
+bin_width_pm25 <- (max(data$PM2_5, na.rm = TRUE) - min(data$PM2_5, na.rm = TRUE)) / 20
+
+# Création de l'histogramme avec superposition de la courbe de densité
+ggplot(data, aes(x = PM2_5)) +
+  geom_histogram(aes(y = ..density..), 
+                 binwidth = bin_width_pm25, 
+                 fill = "lightblue", 
+                 color = "black", 
+                 alpha = 0.6) +  # Histogram
+  geom_density(color = "red", size = 1.2) +  # Density curve
+  labs(title = "Histogram and Density of PM2.5",
+       x = "PM2.5 (µg/m³)",
+       y = "Density") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold")
+  )
+
+```
+```{r}
+# Calcul du binwidth pour AQI (20 bins)
+bin_width_aqi <- (max(data$AQI, na.rm = TRUE) - min(data$AQI, na.rm = TRUE)) / 20
+
+# Création de l'histogramme avec superposition de la courbe de densité
+ggplot(data, aes(x = AQI)) +
+  geom_histogram(aes(y = ..density..), 
+                 binwidth = bin_width_aqi, 
+                 fill = "lightblue", 
+                 color = "black", 
+                 alpha = 0.6) +  # Histogram
+  geom_density(color = "red", size = 1.2) +  # Density curve
+  labs(title = "Histogram and Density of AQI",
+       x = "AQI Index",
+       y = "Density") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold")
+  )
+
+```
+
+
+```{r}
+# Charger les bibliothèques nécessaires
+library(corrplot)
+library(knitr)
+library(kableExtra)
+
+# Sélectionner uniquement les variables numériques
+cor_matrix <- cor(data[, c("error", "AQI", "NO2", "PM10", "PM2_5", "SO2", "gdp", "inflation_rate", "unemployment_rate")], 
+                  use = "complete.obs")
+
+# Affichage graphique de la matrice de corrélation
+corrplot(cor_matrix, method = "color", type = "lower", tl.col = "black", tl.srt = 45)
+
+# Transformer la matrice en un tableau structuré
+cor_table <- as.data.frame(as.table(cor_matrix))
+
+# Renommer les colonnes pour plus de clarté
+colnames(cor_table) <- c("Variable 1", "Variable 2", "Corrélation")
+
+# Filtrer pour éviter les doublons et rendre la lecture plus facile
+cor_table <- cor_table[cor_table$`Variable 1` != cor_table$`Variable 2`, ]
+
+# Trier par valeur absolue de la corrélation (de la plus forte à la plus faible)
+cor_table <- cor_table[order(abs(cor_table$Corrélation), decreasing = TRUE), ]
+
+# Affichage sous forme de tableau structuré
+cor_table %>%
+  kable("html", caption = "Matrice de Corrélation Structurée") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+
+```
+#Si une corrélation est > 0.5 ou < -0.5, il y a une relation notable.
+#Une forte colinéarité entre plusieurs polluants pourrait fausser les résultats.
+
+```{r}
+# Charger les bibliothèques nécessaires
+library(dplyr)
+library(reshape2)
+library(knitr)
+library(kableExtra)
+library(openxlsx)  # Pour exporter en Excel
+
+# Ajouter le terme quadratique AQI_squared
+data <- data %>%
+  mutate(AQI_squared = AQI^2)
+
+# Calculer la matrice de corrélation
+cor_matrix <- cor(data[, c("error", "AQI", "AQI_squared")], use = "complete.obs")
+
+# Transformer la matrice en format tableau croisé (data frame)
+cor_table <- as.data.frame(as.table(cor_matrix))
+
+# Renommer les colonnes pour plus de clarté
+colnames(cor_table) <- c("Variable 1", "Variable 2", "Corrélation")
+
+# Affichage structuré sous forme de tableau croisé
+kable(cor_table, caption = "Matrice de Corrélation Croisée") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+# Exporter en fichier Excel
+write.xlsx(cor_table, file = "Matrice_Correlation_Croisée.xlsx", sheetName = "Corrélation", rowNames = FALSE)
+
+# Message de confirmation
+cat("✅ La matrice de corrélation croisée a été exportée sous le nom 'Matrice_Correlation_Croisée.xlsx' 📂")
+
+```
+
+
+```{r}
+ggplot(data, aes(x = country, y = log_error, fill = country)) +
+  geom_boxplot() +
+  labs(title = "Comparison of Forecast Errors by Country", 
+       x = "Country", 
+       y = "Log(Forecast Error)") +
+  theme_minimal()
+
+
+
+```
+```{r}
+# Charger les bibliothèques
+library(ggplot2)
+library(dplyr)
+
+# Appliquer une transformation logarithmique pour éviter l'effet "tout concentré autour de zéro"
+data <- data %>%
+  mutate(log_error = log(1 + abs(error)))  # Ajout d'une transformation log(1 + error) pour lisibilité
+
+# Sélection des analystes avec le plus d'observations (Top 20)
+top_analysts <- data %>%
+  group_by(id_analyst) %>%
+  summarise(Nb_Obs = n(), Mean_Error = mean(error, na.rm = TRUE)) %>%
+  arrange(desc(Nb_Obs)) %>%
+  top_n(20, Nb_Obs)  # Prendre les 20 analystes les plus fréquents
+
+data_filtered <- data %>% filter(id_analyst %in% top_analysts$id_analyst)
+
+# Création du boxplot amélioré avec transformation log
+ggplot(data_filtered, aes(x = as.factor(id_analyst), y = log_error, fill = as.factor(id_analyst))) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.6) +  # Suppression des outliers visibles
+  geom_jitter(width = 0.2, alpha = 0.2, color = "black", size = 1) +  # Points plus petits et transparents
+  labs(title = "Distribution Log des Erreurs de Prévision par Analyste (Top 20)",
+       x = "ID Analyste (Top 20)",
+       y = "log(1 + |Erreur de prévision|)") +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotation des labels pour lisibilité
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "none"
+  )
+
+
+```
+#étant donné que l'erreur de prévision est fortement concentrée autour de zéro, nous pouvons améliorer encore plus la visualisation en transformant error pour mieux voir les variations. donc en log  Supprimer les analystes ayant des erreurs trop faibles uniquement → Garde seulement les analystes avec un minimum de variabilité.
+```{r}
+# Moyenne des erreurs par année
+data_summary_time <- data %>%
+  group_by(year) %>%
+  summarise(Moyenne_Error = mean(error, na.rm = TRUE))
+
+# Tracé de la tendance des erreurs dans le temps
+ggplot(data_summary_time, aes(x = year, y = Moyenne_Error)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(color = "red", size = 2) +
+  labs(title = "Évolution des Erreurs de Prévision au Fil du Temps",
+       x = "Année",
+       y = "Erreur Moyenne") +
+  theme_minimal()
+
+```
+
+```{r}
+ggplot(data, aes(x = PM2_5, y = error)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "loess", color = "red", se = TRUE) +  # LOESS capture non-linéarités
+  labs(title = "Relation non linéaire entre PM2.5 et Erreur",
+       x = "PM2.5 (μg/m³)",
+       y = "performance de l'analyste") +
+  theme_minimal()
+
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# 1. Aggregated stats
+yearly_stats <- data %>%
+  group_by(year) %>%
+  summarize(mean_AQI = mean(AQI, na.rm = TRUE),
+            mean_error = mean(error, na.rm = TRUE))
+
+# 2. Plot with dual Y axis
+ggplot(yearly_stats, aes(x = as.numeric(year))) +
+  
+  # Primary axis: AQI
+  geom_line(aes(y = mean_AQI, color = "AQI"), size = 1.2) +
+  geom_point(aes(y = mean_AQI, color = "AQI"), size = 2) +
+  
+  # Secondary axis: Error (rescaled to fit the same plot)
+  geom_line(aes(y = mean_error * 10, color = " Error"), size = 1.2, linetype = "dashed") +
+  geom_point(aes(y = mean_error * 10, color = "SError"), size = 2, shape = 17) +
+  
+  # Define axis labels and scaling
+  scale_y_continuous(
+    name = "Average AQI",
+    sec.axis = sec_axis(~./10, name = "Average Error")
+  ) +
+  
+  scale_x_continuous(breaks = seq(2015, 2023, 1)) +
+  
+  scale_color_manual(values = c("AQI" = "darkorange", "Error" = "steelblue")) +
+  
+  labs(title = "Trends in Air Pollution and Analyst Error",
+       x = "Year",
+       color = "Indicator") +
+  
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title.y.right = element_text(color = "steelblue"),
+    axis.title.y.left  = element_text(color = "darkorange")
+  )
+
+```
+#Si l’erreur de prévision augmente ou diminue avec le temps, il faudra intégrer une tendance temporelle dans le modèle. Des variations cycliques ? → Il faut peut-être inclure des effets de saisonnalité (mois, trimestre).
+
+```{r}
+# Charger les bibliothèques nécessaires
+library(corrplot)
+library(dplyr)
+library(openxlsx)  # Pour exporter en Excel
+
+# Vérifier que les données sont bien triées par date et analyste
+data <- data %>%
+  arrange(id_analyst, date) %>%  # Tri pour le bon calcul des lags
+  mutate(
+    error_lag1 = lag(error, 1), 
+    AQI_lag1 = lag(AQI, 1),
+    PM2_5_lag1 = lag(PM2_5, 1),
+    gdp_lag1 = lag(gdp, 1)
+  )
+
+# Sélectionner uniquement les variables clés
+cor_matrix <- cor(data[, c("error", "log_error", "AQI", "PM2_5", "PM2_5_lag1", "gdp")], use = "complete.obs")
+
+# Affichage graphique
+corrplot(cor_matrix, method = "color", type = "lower", tl.col = "black", tl.srt = 45)
+
+# Convertir la matrice en tableau structuré
+cor_table <- as.data.frame(cor_matrix)
+
+# Exporter en fichier Excel
+write.xlsx(cor_table, file = "Matrice_Correlation_Lags.xlsx", sheetName = "Corrélation", rowNames = TRUE)
+
+# Message de confirmation
+cat("✅ La matrice de corrélation avec variables retardées a été exportée sous le nom 'Matrice_Correlation_Lags.xlsx' 📂")
+
+
+```
+#Si error est fortement corrélé à error_lag1, il faudra utiliser un modèle dynamique (ex : Arellano-Bond GMM).Si la pollution actuelle est très corrélée aux valeurs retardées, alors la pollution persistante peut être un facteur clé.
+
+```{r}
+library(ggplot2)
+
+ggplot(data, aes(x = AQI, y = log_error)) +
+  geom_point(alpha = 0.4, color = "blue") +
+  geom_smooth(method = "loess", color = "red", se = TRUE) +
+  labs(title = "Relationship Between AQI and Analysts' Forecast Error",
+       x = "AQI",
+       y = "log(Forecast Error)") +
+  theme_minimal()
+
+
+
+```
+```{r}
+# Charger les bibliothèques nécessaires
+library(dplyr)
+library(openxlsx)  # Pour exporter en Excel
+
+# Ajouter le terme quadratique et son logarithme
+data <- data %>%
+  mutate(AQI_squared = AQI^2,
+         log_AQI_squared = log(AQI_squared + 1),  # Ajout de 1 pour éviter les valeurs négatives
+         log_AQI = log(AQI + 1), 
+         log_error = log(abs(error) + 1))  # Log de l'erreur en valeur absolue pour éviter les valeurs négatives
+
+# Sélectionner les variables d'intérêt
+variables <- c("log_error", "log_AQI", "log_AQI_squared")
+
+# Calculer la matrice de corrélation
+cor_matrix <- cor(data[, variables], use = "complete.obs")
+
+# Convertir la matrice en data frame pour l'export
+cor_df <- as.data.frame(cor_matrix)
+
+# Exporter en fichier Excel
+write.xlsx(cor_df, file = "Matrice_Correlation_Log.xlsx", sheetName = "Corrélation", rowNames = TRUE)
+
+# Message de confirmation
+cat("✅ La matrice de corrélation a été exportée sous le nom 'Matrice_Correlation_Log.xlsx' 📂")
+
+```
+
+
+```{r}
+# Exporter les résultats sous forme de tableau lisible
+stargazer(model_quadratic, type = "text",
+          title = "Estimation du Modèle Quadratique sur l'Erreur des Analystes",
+          digits = 4)
+
+```
+  
+```{r}
+# Estimation du modèle quadratique avec effets fixes
+model_quadratic <- plm(error ~ AQI + AQI_squared + gdp + inflation_rate + unemployment_rate, 
+                        data = data, 
+                        model = "within", 
+                        index = c("id_analyst", "year"))
+
+# Affichage des résultats
+summary(model_quadratic)
+
+```
+```{r}
+data <- data %>%
+  mutate(AQI_lag1 = lag(AQI, 1),
+         AQI_lag7 = lag(AQI, 7),
+         AQI_lag14 = lag(AQI, 14))
+
+cor_matrix <- cor(data[, c("error", "AQI_squared", "AQI_lag7", "AQI_lag14")], use = "complete.obs")
+print(cor_matrix)
+
+```
+
+```{r}
+# Créer des catégories de pollution basées sur les quartiles
+data <- data %>%
+  mutate(pollution_level = cut(AQI,
+                               breaks = quantile(AQI, probs = c(0, 0.25, 0.50, 0.75, 1), na.rm = TRUE),
+                               labels = c("Low", "Moderate", "High", "Very High"),
+                               include.lowest = TRUE),
+         log_error = log(error + 1))  # Transformation logarithmique de l'erreur
+
+# Visualisation de la distribution des erreurs de prévision par niveau de pollution (Boxplot)
+ggplot(data, aes(x = pollution_level, y = log_error, fill = pollution_level)) +
+  geom_boxplot(alpha = 0.7, outlier.color = "red", outlier.shape = 16, outlier.size = 2) +
+  scale_fill_viridis_d() +
+  labs(title = "Forecast Errors by Pollution Levels",
+       x = "Pollution Level",
+       y = "Log(Forecast Error)",
+       fill = "Pollution Level") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5)) 
+
+```
+```{r}
+install.packages("tseries")
+```
+
+
+```{r}
+library(tseries)
+
+# Test ADF sur l'erreur de prévision
+adf.test(data$error, alternative = "stationary")
+
+# Test ADF sur AQI
+adf.test(data$AQI, alternative = "stationary")
+
+```
+#Si p-value < 0.05 → La variable est stationnaire ✅.#i p-value > 0.05 → La variable n'est pas stationnaire, il faut prendre la différence première (diff(error)).
+
+```{r}
+# Charger les bibliothèques nécessaires
+library(tseries)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+
+# Liste des variables à tester
+variables <- c("error", "AQI", "PM2_5", "gdp")
+
+# Création d'un tableau vide pour stocker les résultats
+results <- data.frame(Variable = character(),
+                      P_Value = numeric(),
+                      Stationnaire = character(),
+                      stringsAsFactors = FALSE)
+
+# Boucle sur chaque variable pour effectuer le test ADF
+for (var in variables) {
+  test_result <- adf.test(data[[var]], alternative = "stationary")
+  p_value <- test_result$p.value
+  conclusion <- ifelse(p_value < 0.05, "✅ Stationnaire", "❌ Non stationnaire (Diff nécessaire)")
+  
+  # Ajouter les résultats au tableau
+  results <- rbind(results, data.frame(Variable = var, P_Value = round(p_value, 4), Stationnaire = conclusion))
+}
+
+# Affichage du tableau sous format propre
+results %>%
+  kable("html", caption = "Résultats du Test de Stationnarité (ADF)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+```
+#Test de Dickey-Fuller Augmenté (ADF)
+```{r}
+# Charger les bibliothèques nécessaires
+library(plm)
+library(lmtest)
+
+# Modèle à effets fixes (FE) sans les variables retardées, week et 2weeks
+model_fe <- plm(error ~ AQI + NO2 + PM10 + PM2_5 + SO2 + 
+                gdp + inflation_rate + unemployment_rate, 
+                data = data, 
+                model = "within", 
+                index = c("id_analyst", "year"))
+
+# Modèle à effets aléatoires (RE) sans les variables retardées, week et 2weeks
+model_re <- plm(error ~ AQI + NO2 + PM10 + PM2_5 + SO2 + 
+                gdp + inflation_rate + unemployment_rate, 
+                data = data, 
+                model = "random", 
+                index = c("id_analyst", "year"))
+
+# Test de Hausman
+hausman_test <- phtest(model_fe, model_re)
+print(hausman_test)
+
+
+
+```
+#Si p-value < 0.05 → Utiliser Effets Fixes (FE) ✅ Cela signifie que les effets individuels (id_analyst) sont corrélés aux variables explicatives.Le modèle RE est biaisé, donc il faut utiliser FE.
+
+#Si p-value > 0.05 → Utiliser Effets Aléatoires (RE) ✅ Cela signifie que les effets individuels ne sont pas corrélés aux variables explicatives. Le modèle RE est plus efficace et économiquement justifié.
+```{r}
+# Comparer R² ajusté des deux modèles
+cat("R² ajusté FE:", summary(model_fe)$r.squared.adj, "\n")
+cat("R² ajusté RE:", summary(model_re)$r.squared.adj, "\n")
+```
+
+```{r}
+library(splines)
+# Régression avec splines naturelles
+model_spline <- lm(error ~ ns(AQI, df = 4), data = data)
+
+# Résumé des résultats
+summary(model_spline)
+
+# Visualisation
+ggplot(data, aes(x = AQI, y = error)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "lm", formula = y ~ ns(x, df = 4), color = "red", se = TRUE) +
+  labs(title = "Régression avec Splines : AQI vs Erreur",
+       x = "Indice AQI",
+       y = "Erreur de prévision") +
+  theme_minimal()
+```
+
+#Tester une relation non linéaire
+```{r}
+data <- data %>%
+  mutate(AQI_squared = AQI^2)
+
+model_fe_quad <- plm(error ~ AQI + AQI_squared + gdp + inflation_rate + unemployment_rate, 
+                      data = data, 
+                      model = "within", 
+                      index = c("id_analyst", "year"))
+summary(model_fe_quad)
+
+
+```
+```{r}
+AQI_max <- -1.2133 / (2 * -0.0241)
+print(AQI_max)
+
+```
+
+```{r}
+model_fe_country <- plm(error ~ AQI + AQI_squared + gdp + inflation_rate + unemployment_rate, 
+                         data = data, model = "within", index = c("country", "year"))
+summary(model_fe_country)
+
+```
+
+```{r}
+
+```
+
+
+## R Markdown
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
