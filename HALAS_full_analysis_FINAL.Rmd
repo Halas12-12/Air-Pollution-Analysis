@@ -1,1 +1,2648 @@
+---
+title: "HALAS Final Analysis – Air Pollution & Analyst Forecast Accuracy"
+author: "Hariph Assouma"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    df_print: paged
+    code_folding: show
+  pdf_document:
+    toc: true
+    number_sections: true
+fontsize: 11pt
+lang: en
+---
+
+\`\`
+
+```{r}
+
+```
+
+```{r}
+rm(list=ls())
+```
+
+############################################################### 
+
+# SETUP
+
+############################################################### 
+
+```{r}
+knitr::opts_chunk$set(
+  echo = TRUE,       # montre le code
+  message = FALSE,   # cache les messages parasites
+  warning = FALSE,   # cache les warnings
+  fig.width = 8,
+  fig.height = 5,
+  fig.align = "center"
+)
+```
+
+# On charge les librairies dont on a besoin.
+
+```{r}
+library(tidyverse)    # manipulation de données + graphiques
+library(data.table)   # manipulations rapides
+library(lubridate)    # dates
+library(haven)        # pour lire les fichiers Stata (.dta)
+library(plm)          # modèles panel
+library(fixest)       # modèles très flexibles + FE + IV
+library(lmtest)       # tests statistiques (BP, RESET...)
+library(sandwich)     # erreurs robustes
+library(mgcv)         # GAM (modèles non-linéaires)
+library(DescTools)    # quelques outils statistiques
+library(kableExtra)   # tables jolies
+library(broom)        # tidy() résultats
+library(relaimpo)     # importance relative
+library(lme4)         # modèles hiérarchiques
+library(performance)  # ICC, diagnostics
+library(viridis)      # belles couleurs
+library(forecast)     # STL / séries temporelles
+```
+
+############################################################### 
+
+# SECTION 1 — Importation des données
+
+############################################################### 
+
+```{r}
+
+library(haven)
+
+# --- Chemin exact (version A confirmée par toi)
+data_path <- "C:/Users/HP/OneDrive/Bureau/HALAS Master Thesis/Data/HALASdata.dta"
+
+# Vérification simple : si le fichier n'existe pas, on arrête avec un message clair.
+if (!file.exists(data_path)) {
+  stop("Le fichier HALASdata.dta est introuvable au chemin indiqué. 
+       Vérifie le dossier 'Data' dans OneDrive.")
+}
+
+# Lecture du fichier
+data <- read_dta(data_path)
+
+# Message simple pour que tu comprennes :
+cat("✓ Données chargées avec succès — dimensions :", 
+    nrow(data), "lignes et", ncol(data), "colonnes.\n")
+
+# On convertit éventuellement les dates (si nécessaires)
+# Ce code ne casse rien : il détecte automatiquement les formats Stata.
+library(lubridate)
+if ("date" %in% names(data)) {
+  data$date <- as_date(data$date)
+}
+
+```
+
+############################################################### 
+
+# SECTION 2 — Création des variables d'erreur (APE + AFE)
+
+############################################################### 
+
+```{r}
+
+# err_abs  = combien l’analyste s’est trompé (en valeur absolue)
+# ape      = erreur relative demandée par les reviewers
+# y_log    = Log(Error) = log(APE + ε) → variable principale de l'article
+# y_asinh  = transformation alternative sans log
+# afe      = erreur de l’analyste comparée à la moyenne des analystes
+# y_log_afe = log(afe + EPS) → robustesse
+
+stopifnot(all(c("value", "actual", "cname", "date", "id_analyst") %in% names(data)))
+
+library(dplyr)
+
+# 1) Erreur absolue
+data <- data %>%
+  mutate(err_abs = abs(value - actual))
+
+# 2) Erreur relative APE (principale)
+data <- data %>%
+  mutate(ape = err_abs / pmax(abs(actual), .Machine$double.eps))
+
+# 3) Petit epsilon pour éviter log(0)
+EPS <- quantile(data$ape[data$ape > 0], 0.5, na.rm = TRUE) * 1e-4
+
+# 4) Variable principale
+data <- data %>%
+  mutate(
+    y_log   = log(ape + EPS),
+    y_asinh = asinh(ape)
+  )
+
+# 5) AFE = Erreur de l’analyste / moyenne des erreurs (même entreprise même date)
+data <- data %>%
+  group_by(cname, date) %>%
+  mutate(mean_abs_err_jt = mean(err_abs, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(
+    afe = err_abs / pmax(mean_abs_err_jt, EPS),
+    y_log_afe = log(afe + EPS)
+  )
+
+cat("✓ Variables d’erreur (APE + AFE) créées et prêtes pour les analyses.\n")
+
+```
+
+```{r}
+###############################################################
+# SECTION 3 — Statistiques descriptives (fidèles aux 2 HTML)
+###############################################################
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(kableExtra)
+library(lubridate)
+library(scales)
+library(viridis)
+
+# ------------------------------------------------------------
+# 2.1 Tableau descriptif global
+# ------------------------------------------------------------
+data <- data %>%
+  mutate(
+    log_gdp = ifelse(gdp > 0, log(gdp), NA_real_)
+  )
+
+vars_descrip <- c(
+  # Erreurs (brutes et transformées)
+  "err_abs", "ape", "y_log", "y_asinh", "afe", "y_log_afe",
+  # Pollution
+  "AQI", "NO2", "PM10", "PM2_5", "SO2",
+  # Macros
+  "log_gdp", "inflation_rate", "unemployment_rate",
+  # Lags (si présents — ne casse pas si absents)
+  intersect(c("NO2_lag1","PM10_lag1","PM2_5_lag1","SO2_lag1",
+              "NO2_week","PM10_week","PM2_5_week","SO2_week",
+              "NO2_2weeks","PM10_2weeks","PM2_5_2weeks","SO2_2weeks"),
+            names(data))
+) %>% as.character()
+
+
+# forcer l'utilisation des bonnes fonctions dplyr/tidyselect
+desc_tbl <- data %>%
+  dplyr::select(tidyselect::any_of(vars_descrip)) %>%
+  dplyr::summarise(across(
+    .cols = dplyr::everything(),
+    .fns  = list(
+      mean   = ~mean(.x, na.rm = TRUE),
+      median = ~median(.x, na.rm = TRUE),
+      sd     = ~sd(.x, na.rm = TRUE),
+      min    = ~min(.x, na.rm = TRUE),
+      max    = ~max(.x, na.rm = TRUE),
+      n      = ~sum(!is.na(.x))
+    ),
+    .names = "{.col}__{.fn}"
+  )) %>%
+  tidyr::pivot_longer(dplyr::everything(),
+                      names_to = c("variable","stat"),
+                      names_sep = "__",
+                      values_to = "value") %>%
+  tidyr::pivot_wider(names_from = stat, values_from = value) %>%
+  dplyr::arrange(variable)
+
+
+# Table en anglais (pour l’article)
+desc_tbl %>%
+  kbl(caption = "Summary Statistics (Global)",
+      digits = 3, align = "lrrrrrr") %>%
+  kable_classic(full_width = FALSE)
+```
+
+```{r}
+# ------------------------------------------------------------
+# 2.2 Comptage des valeurs manquantes (NA)
+# ------------------------------------------------------------
+na_tbl <- data %>%
+  summarise(across(everything(), ~sum(is.na(.x)))) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "na_count") %>%
+  arrange(desc(na_count))
+
+na_tbl %>%
+  kbl(caption = "Missing Values by Variable",
+      digits = 0, align = "lr") %>%
+  kable_classic(full_width = FALSE)
+```
+
+```{r}
+# ------------------------------------------------------------
+# 2.3 AQI agrégé par pays (moyenne, médiane, n)
+# ------------------------------------------------------------
+stopifnot(all(c("country","AQI") %in% names(data)))
+
+aqi_by_country <- data %>%
+  group_by(country) %>%
+  summarise(
+    mean_AQI   = mean(AQI, na.rm = TRUE),
+    median_AQI = median(AQI, na.rm = TRUE),
+    n_obs      = sum(!is.na(AQI)),
+    .groups = "drop"
+  ) %>%
+  arrange(country)
+
+aqi_by_country %>%
+  kbl(caption = "AQI by Country (Mean, Median, Obs.)",
+      digits = 2, align = "lrrr") %>%
+  kable_classic(full_width = FALSE)
+```
+
+```{r}
+# ------------------------------------------------------------
+# 2.4 Évolution annuelle AQI – Europe (barplot)
+# ------------------------------------------------------------
+stopifnot("year" %in% names(data))
+
+aqi_by_year <- data %>%
+  group_by(year) %>%
+  summarise(mean_AQI = mean(AQI, na.rm = TRUE), .groups = "drop")
+
+ggplot(aqi_by_year, aes(x = as.factor(year), y = mean_AQI)) +
+  geom_col(fill = "#2C7BB6") +
+  geom_text(aes(label = round(mean_AQI,1)), vjust = -0.3, size = 3) +
+  labs(
+    title = "Average AQI by Year (Europe)",
+    x = "Year", y = "Average AQI"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+```{r}
+# ------------------------------------------------------------
+# 2.5 AQI annuel – 4 pays (FR, DE, GB, CH)
+# ------------------------------------------------------------
+top4 <- c("FR","DE","GB","CH")
+
+aqi_by_year_ctry <- data %>%
+  filter(country %in% top4) %>%
+  group_by(country, year) %>%
+  summarise(mean_AQI = mean(AQI, na.rm = TRUE), .groups = "drop")
+
+ggplot(aqi_by_year_ctry, aes(x = year, y = mean_AQI, color = country)) +
+  geom_line() + geom_point() +
+  facet_wrap(~ country, scales = "free_y") +
+  scale_color_viridis_d(end = 0.85) +
+  labs(
+    title = "Average AQI by Year — FR, DE, GB, CH",
+    x = "Year", y = "Average AQI", color = "Country"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# ------------------------------------------------------------
+# 2.6 Polluants annuels – Europe
+# ------------------------------------------------------------
+poll_no_aqi <- c("AQI","NO2","PM10","PM2_5","SO2")
+poll_no_aqi <- intersect(poll_no_aqi, names(data))  # sécurité
+
+poll_year_eu <- data %>%
+  group_by(year) %>%
+  summarise(across(all_of(poll_no_aqi), ~mean(.x, na.rm = TRUE)), .groups = "drop") %>%
+  pivot_longer(-year, names_to = "pollutant", values_to = "mean_val")
+
+ggplot(poll_year_eu, aes(x = year, y = mean_val, color = pollutant)) +
+  geom_line() + geom_point() +
+  scale_color_viridis_d(end = 0.9) +
+  labs(
+    title = "Annual Pollutant Trends",
+    x = "Year", y = "Average Concentration", color = "Pollutant"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# ------------------------------------------------------------
+# 2.7 Polluants annuels – 4 pays 
+# ------------------------------------------------------------
+by_ctry_year <- data %>%
+  filter(country %in% top4) %>%
+  group_by(country, year) %>%
+  summarise(across(all_of(poll_no_aqi), ~mean(.x, na.rm=TRUE)), .groups='drop') %>%
+  pivot_longer(-c(country, year), names_to = "pollutant", values_to = "mean_val")
+
+ggplot(by_ctry_year, aes(year, mean_val, color = pollutant)) +
+  geom_line() + geom_point() +
+  facet_wrap(~ country, scales = "free_y") +
+  scale_color_viridis_d(end = 0.9) +
+  labs(
+    title = "Annual Pollutant Trends by Country (FR, DE, GB, CH — excluding AQI)",
+    x = "Year", y = "Average Concentration", color = "Pollutant"
+  ) +
+  theme_minimal()
+
+# ------------------------------------------------------------
+# 2.8 Saisonnalité AQI (mensuelle)
+# ------------------------------------------------------------
+if ("date" %in% names(data)) {
+  aqi_season <- data %>%
+    mutate(
+      month = factor(
+        lubridate::month(date),
+        levels = 1:12,
+        labels = month.abb
+      )
+    ) %>%
+    group_by(month) %>%
+    summarise(mean_AQI = mean(AQI, na.rm = TRUE), .groups = "drop")
+
+  ggplot(aqi_season, aes(x = month, y = mean_AQI, group = 1)) +
+    geom_line(color = "#1B9E77") +
+    geom_point(color = "#1B9E77") +
+    labs(
+      title = "Seasonal Pattern of AQI (Monthly Average)",
+      x = "Month", y = "Average AQI"
+    ) +
+    theme_minimal()
+}
+```
+
+```{r}
+
+# ----- Variant: Faceted BAR plot for annual AQI by country (FR, DE, GB, CH) -----
+top4 <- c("FR","DE","GB","CH")
+
+aqi_by_year_ctry <- data %>%
+  dplyr::filter(country %in% top4) %>%
+  dplyr::group_by(country, year) %>%
+  dplyr::summarise(mean_AQI = mean(AQI, na.rm = TRUE), .groups = "drop")
+
+ggplot(aqi_by_year_ctry, aes(x = factor(year), y = mean_AQI)) +
+  geom_col(fill = "#2C7BB6") +
+  facet_wrap(~ country, scales = "free_y") +
+  labs(
+    title = "Average AQI by Year — FR, DE, GB, CH (Bar, Faceted)",
+    x = "Year", y = "Average AQI"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"))
+
+```
+
+```{r}
+
+# ----- Seasonal pattern by country (faceted) -----
+if ("date" %in% names(data)) {
+  seasonal_ctry <- data %>%
+    dplyr::filter(country %in% top4) %>%
+    dplyr::mutate(
+      month_fac = factor(
+        lubridate::month(date),
+        levels = 1:12,
+        labels = month.abb
+      )
+    ) %>%
+    dplyr::group_by(country, month_fac) %>%
+    dplyr::summarise(mean_AQI = mean(AQI, na.rm = TRUE), .groups = "drop")
+
+  ggplot(seasonal_ctry, aes(x = month_fac, y = mean_AQI, group = 1)) +
+    geom_line(color = "#1B9E77") +
+    geom_point(color = "#1B9E77") +
+    facet_wrap(~ country, scales = "free_y") +
+    labs(
+      title = "AQI Seasonality by Country (Monthly Average)",
+      x = "Month", y = "Average AQI"
+    ) +
+    theme_minimal()
+}
+
+```
+
+```{r}
+# ------------------------------------------------------------
+# 2.9 Décomposition STL (AQI mensuel) 
+# ------------------------------------------------------------
+# Cela reproduit l'esprit de la décomposition de tendance/saison/résidus.
+if ("date" %in% names(data)) {
+
+  library(lubridate)
+  library(forecast)
+  library(ggplot2)
+
+  aqi_month_ts <- data %>%
+    dplyr::mutate(month_id = lubridate::floor_date(date, "month")) %>%
+    dplyr::group_by(month_id) %>%
+    dplyr::summarise(
+      mean_AQI = mean(AQI, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    dplyr::arrange(month_id)
+
+  if (nrow(aqi_month_ts) >= 24) {
+
+    start_year  <- lubridate::year(min(aqi_month_ts$month_id, na.rm = TRUE))
+    start_month <- lubridate::month(min(aqi_month_ts$month_id, na.rm = TRUE))
+
+    aqi_ts <- ts(
+      aqi_month_ts$mean_AQI,
+      frequency = 12,
+      start = c(start_year, start_month)
+    )
+
+    fit_stl <- stl(aqi_ts, s.window = "periodic")
+
+    forecast::autoplot(fit_stl) +
+      ggplot2::labs(
+        title = "STL Decomposition of Monthly AQI",
+        subtitle = "Trend / Seasonal / Remainder"
+      ) +
+      ggplot2::theme_minimal()
+
+  } else {
+    message("Not enough monthly data to run STL decomposition.")
+  }
+}
+
+cat("✓ Descriptive statistics and figures generated (as in your HTML outputs).\n")
+
+```
+
+```{r}
+#2.10 Distributions — AQI & Polluants (histogrammes + densités)
+
+library(ggplot2)
+poll_all <- intersect(c("AQI","NO2","PM10","PM2_5","SO2"), names(data))
+
+for (v in poll_all) {
+  p <- ggplot(data, aes(x = .data[[v]])) +
+    geom_histogram(aes(y = after_stat(density)), bins = 40, fill = "#4C78A8", color = "white", alpha = .85) +
+    geom_density(color = "#F58518", linewidth = 1) +
+    labs(title = paste("Distribution of", v),
+         x = v, y = "Density") +
+    theme_minimal()
+  print(p)
+}
+
+```
+
+```{r}
+#2.11 Boxplots par pays (AQI & Polluants)
+poll_no_aqi <- intersect(c("NO2","PM10","PM2_5","SO2"), names(data))
+
+for (v in poll_no_aqi) {
+  p <- ggplot(data, aes(x = country, y = .data[[v]])) +
+    geom_boxplot(outlier.color = "red", fill = "#A0CBE8") +
+    labs(title = paste("Country Distribution (Boxplot) —", v),
+         x = "Country", y = "Concentration") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+  print(p)
+}
+
+```
+
+```{r}
+#2.13 Distribution de l’erreur (APE & y_log)
+
+if (all(c("ape","y_log") %in% names(data))) {
+
+  ggplot(data, aes(x = ape)) +
+    geom_histogram(bins = 40, fill = "#6BA292", color = "white") +
+    labs(title = "Distribution of APE (Relative Error)", x = "APE", y = "Count") +
+    theme_minimal() -> p1
+
+  ggplot(data, aes(x = y_log)) +
+  geom_histogram(bins = 40, fill = "#BFD3E6", color = "white") +
+  labs(title = "Distribution of Log(Error)", 
+       x = "Log(Error)", y = "Count") +
+  theme_minimal() -> p2
+
+
+  print(p1); print(p2)
+}
+
+```
+
+```{r}
+#2.14 Effectifs (fréquences) par pays et par année
+
+library(kableExtra)
+
+counts_country <- data %>%
+  count(country, name = "n_obs") %>%
+  arrange(desc(n_obs))
+
+kbl(counts_country, caption = "Observation Counts by Country", align = "lr") %>%
+  kable_classic(full_width = FALSE)
+
+counts_year <- data %>%
+  count(year, name = "n_obs") %>%
+  arrange(year)
+
+kbl(counts_year, caption = "Observation Counts by Year", align = "lr") %>%
+  kable_classic(full_width = FALSE)
+
+```
+
+```{r}
+
+###############################################################
+# 2.15 Time evolution of the forecasting error (Log(Error))
+###############################################################
+
+stopifnot(all(c("year","y_log") %in% names(data)))
+
+# --- Global (Europe) : moyenne annuelle de y_log
+err_by_year <- data %>%
+  dplyr::group_by(year) %>%
+  dplyr::summarise(mean_ylog = mean(y_log, na.rm = TRUE),
+                   se = sd(y_log, na.rm = TRUE)/sqrt(sum(!is.na(y_log))),
+                   .groups = "drop")
+
+ggplot(err_by_year, aes(x = as.factor(year), y = mean_ylog)) +
+  geom_col(fill = "#6BA292") +
+  geom_errorbar(aes(ymin = mean_ylog - 1.96*se,
+                    ymax = mean_ylog + 1.96*se),
+                width = .15) +
+  labs(title = "Average Log(Error) by Year (Europe)",
+     x = "Year", y = "Average Log(Error)")
+
+# --- Par pays (facettes) : focus sur les 4 hubs si utile
+top4 <- c("FR","DE","GB","CH")
+
+err_by_year_ctry <- data %>%
+  dplyr::filter(country %in% top4) %>%
+  dplyr::group_by(country, year) %>%
+  dplyr::summarise(mean_ylog = mean(y_log, na.rm = TRUE), .groups = "drop")
+
+ggplot(err_by_year_ctry, aes(x = year, y = mean_ylog)) +
+  geom_line(color = "#4C78A8") + geom_point(color = "#4C78A8") +
+  facet_wrap(~ country, scales = "free_y") +
+  labs(title = "Average Log(Error) by Year — FR, DE, GB, CH",
+     x = "Year", y = "Average Log(Error)") +
+  theme_minimal()
+
+```
+```{r}
+# Seasonal AQI by country (superposé)
+if ("date" %in% names(data)) {
+
+  top4 <- c("FR","DE","GB","CH")
+
+  seasonal_superposed <- data %>%
+    filter(country %in% top4) %>%
+    mutate(
+      month = factor(
+        lubridate::month(date),
+        levels = 1:12,
+        labels = month.abb
+      )
+    ) %>%
+    group_by(country, month) %>%
+    summarise(mean_AQI = mean(AQI, na.rm = TRUE), .groups = "drop")
+
+  ggplot(seasonal_superposed,
+         aes(x = month, y = mean_AQI, color = country, group = country)) +
+    geom_line(size = 1) +
+    geom_point(size = 2) +
+    labs(
+      title = "Seasonal patterns in AQI across the four main European countries",
+      x = "Month", y = "Average AQI"
+    ) +
+    scale_color_viridis_d(end = 0.85) +
+    theme_minimal() +
+    theme(plot.title = element_text(face = "bold", size = 14))
+}
+```
+```{r}
+# ============================================================
+# Figure— Distribution of forecast errors by pollution levels
+# y_log ~ pollution_level (quartiles de AQI)
+# ============================================================
+if (all(c("AQI","y_log") %in% names(data))) {
+  library(dplyr); library(ggplot2); library(scales)
+
+  # 1) Définir 4 niveaux (Low/Moderate/High/Very High) via quartiles
+  q <- quantile(data$AQI, probs = c(.25, .50, .75), na.rm = TRUE)
+  pollution_cut <- function(x) {
+    cut(x,
+        breaks = c(-Inf, q[1], q[2], q[3], Inf),
+        labels = c("Low", "Moderate", "High", "Very High"),
+        right = TRUE, include.lowest = TRUE)
+  }
+
+  fig6_df <- data %>%
+    mutate(
+      pollution_level = pollution_cut(AQI),
+      y_log_ok = ifelse(is.finite(y_log), y_log, NA_real_)
+    ) %>%
+    filter(!is.na(pollution_level), !is.na(y_log_ok))
+
+  # 2) Graphique
+  fig6 <- ggplot(fig6_df, aes(x = pollution_level, y = y_log_ok, fill = pollution_level)) +
+    geom_boxplot(outlier.alpha = .35) +
+    scale_fill_viridis_d(end = .9, option = "C") +
+    labs(
+      title = "Distribution of forecast errors by pollution levels",
+      x = "Pollution Level", y = "Log(Error)"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "right",
+          plot.title = element_text(face = "bold"))
+
+  print(fig6)  # affichage (capturé par tes hooks si actifs)
+
+  # 3) Sauvegarde explicite (au cas où)
+  dir.create(file.path("outputs","plots"), showWarnings = FALSE, recursive = TRUE)
+  ggsave(file.path("outputs","plots","Figure_06_ForecastError_by_PollutionLevels.png"),
+         fig6, width = 10, height = 7, dpi = 200)
+} else {
+  message("[Figure ] Colonnes requises absentes : besoin de 'AQI' et 'y_log'.")
+}
+```
+```{r}
+# ============================================================
+# Figure  — Comparison of forecast errors by country
+# y_log ~ country (ordre par médiane décroissante)
+# ============================================================
+if (all(c("country","y_log") %in% names(data))) {
+  library(dplyr); library(ggplot2)
+
+  # 1) Ordre des pays par médiane de y_log
+  order_country <- data %>%
+    filter(is.finite(y_log), !is.na(country)) %>%
+    group_by(country) %>%
+    summarise(med = median(y_log), .groups = "drop") %>%
+    arrange(desc(med)) %>%
+    pull(country)
+
+  fig7_df <- data %>%
+    mutate(country = factor(country, levels = order_country),
+           y_log_ok = ifelse(is.finite(y_log), y_log, NA_real_)) %>%
+    filter(!is.na(country), !is.na(y_log_ok))
+
+  # 2) Graphique
+  fig7 <- ggplot(fig7_df, aes(x = country, y = y_log_ok, fill = country)) +
+    geom_boxplot(outlier.size = .9, outlier.alpha = .3) +
+    labs(
+      title = "Comparison of forecast errors by country",
+      x = "Country", y = "Log(Error)"
+    ) +
+    scale_fill_viridis_d(end = .95) +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "right",
+          axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1),
+          plot.title = element_text(face = "bold"))
+
+  print(fig7)  # affichage (capturé par tes hooks si actifs)
+
+  # 3) Sauvegarde explicite (au cas où)
+  dir.create(file.path("outputs","plots"), showWarnings = FALSE, recursive = TRUE)
+  ggsave(file.path("outputs","plots","Figure_07_ForecastError_by_Country.png"),
+         fig7, width = 11, height = 7.5, dpi = 200)
+} else {
+  message("[Figure ] Colonnes requises absentes : besoin de 'country' et 'y_log'.")
+}
+```
+
+
+```{r}
+
+
+###############################################################
+# 2.16 Relationship Between AQI and Analysts' Forecast Error
+#   - x = AQI
+#    - y = y_log = Log(Error)
+###############################################################
+
+library(dplyr)
+library(ggplot2)
+library(mgcv)
+
+# 1) Sous-échantillonnage léger si la base est très grande
+#    (pour éviter un "mur de points" tout en gardant la forme)
+set.seed(123)
+plot_df <- if (nrow(data) > 40000) dplyr::sample_n(data, 40000) else data
+
+# 2) Graphique "clair" (points bleus + GAM rouge)
+ggplot(plot_df, aes(x = AQI, y = y_log)) +
+  # points bleus (alpha faible pour transparence)
+  geom_point(color = "#2C7BE5", alpha = 0.35, size = 1.4) +
+  # lissage GAM (ligne rouge, bande grise)
+  geom_smooth(
+    method  = "gam",
+    formula = y ~ s(x, k = 6),    # courbure souple mais pas trop (k=6)
+    color   = "#E15759",          # rouge
+    fill    = "grey75",
+    se      = TRUE,
+    linewidth = 1.1
+  ) +
+  labs(
+    title = "Relationship Between AQI and Analysts' Forecast Error",
+    x = "AQI",
+    y = "Log(Error)"      # = log(APE + ε) dans le papier
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+
+```
+
+```{r}
+###############################################################
+# 2.17 Trends in Air Pollution and Analyst Error (dual-axis)
+###############################################################
+
+library(dplyr)
+library(ggplot2)
+
+# 1) Agrégations annuelles (Europe entière)
+#    - mean_AQI   : AQI moyen par année
+#    - mean_ylog  : Log(Error) moyen par année (DV principale)
+stopifnot(all(c("year","AQI","y_log") %in% names(data)))
+
+annual <- data %>%
+  group_by(year) %>%
+  summarise(
+    mean_AQI  = mean(AQI,  na.rm = TRUE),
+    mean_ylog = mean(y_log, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(year)
+
+# 2) Paramètres de re-scaling pour superposer l'erreur sur l'axe AQI
+#    On cherche a et b tels que : y_plot = a + b * mean_ylog
+#    de sorte que les plages (min/max) se recouvrent visuellement.
+aqi_min <- min(annual$mean_AQI,  na.rm = TRUE)
+aqi_max <- max(annual$mean_AQI,  na.rm = TRUE)
+ylg_min <- min(annual$mean_ylog, na.rm = TRUE)
+ylg_max <- max(annual$mean_ylog, na.rm = TRUE)
+
+b <- (aqi_max - aqi_min) / (ylg_max - ylg_min)
+a <- aqi_min - b * ylg_min
+
+# 3) Données "longues" pour légende/couleurs/styles
+plot_aqi <- annual %>%
+  transmute(year, series = "AQI", y_plot = mean_AQI)
+
+plot_err <- annual %>%
+  transmute(year, series = "Average Log(Error)", y_plot = a + b * mean_ylog)
+
+plot_both <- bind_rows(plot_aqi, plot_err)
+
+# 4) Graphique (style conforme à ton exemple)
+ggplot(plot_both, aes(x = year, y = y_plot, color = series, linetype = series)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  scale_color_manual(
+    name   = "Indicator",
+    values = c(
+      "AQI" = "#F28E2B",
+      "Average Log(Error)" = "grey40"
+    )
+  ) +
+  scale_linetype_manual(
+    name   = "Indicator",
+    values = c(
+      "AQI" = "solid",
+      "Average Log(Error)" = "dashed"
+    )
+  ) +
+  scale_x_continuous(breaks = sort(unique(annual$year))) +
+  scale_y_continuous(
+    name = "Average AQI",
+    sec.axis = sec_axis(
+      ~ (. - a) / b,
+      name = "Average Log(Error)"
+    )
+  ) +
+  labs(
+    title = "Trends in Air Pollution and Analysts' Forecast Error",
+    x = "Year"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title         = element_text(face = "bold", size = 16),
+    axis.title.y       = element_text(color = "#F28E2B", face = "bold"),
+    axis.title.y.right = element_text(color = "#1F77B4", face = "bold"),
+    legend.position    = "right"
+  )
+
+```
+
+#library(fixest)
+
+```{r}
+df_iv <- data
+
+# 1) Modèle OLS
+m1_ols <- lm(y_log ~ AQI, data = df_iv)
+
+#✔️ Test de Ramsey RESET (spécification fonctionnelle)
+lmtest::resettest(m1_ols)
+```
+
+```{r}
+#Hétéroscédasticité (Breusch–Pagan)
+library(lmtest)
+
+bptest(m1_ols)
+
+
+```
+
+```{r}
+#Autocorrélation (Durbin–Watson)
+dwtest(m1_ols)
+```
+
+```{r}
+m2_fe_cy <- feols(y_log ~ AQI | country + year, data = df_iv)
+
+m3_fe_cy_ctrl <- feols(
+  y_log ~ AQI + log_gdp + inflation_rate + unemployment_rate | country + year,
+  data = df_iv
+)
+
+m4_fe_ay_ctrl <- feols(
+  y_log ~ AQI + log_gdp + inflation_rate + unemployment_rate | id_analyst + year,
+  data = df_iv
+)
+
+```
+
+```{r}
+
+# SE clusterisés sur country et year (routine recommandée)
+summary(m2_fe_cy,      cluster = ~ country + year)
+summary(m3_fe_cy_ctrl, cluster = ~ country + year)
+summary(m4_fe_ay_ctrl, cluster = ~ id_analyst + year)  # adapter les clusters à la FE dominante
+
+```
+
+```{r}
+# Hausman test
+
+library(plm)
+
+# Même data et mêmes X que m3_fe_cy_ctrl
+form_plm <- y_log ~ AQI + log_gdp + inflation_rate + unemployment_rate
+
+plm_fe <- plm(form_plm, data = df_iv, index = c("country","year"), model = "within")
+plm_re <- plm(form_plm, data = df_iv, index = c("country","year"), model = "random")
+
+phtest(plm_fe, plm_re)  # Hausman
+
+
+```
+
+```{r}
+# GAM
+library(mgcv)
+gam_cy <- gam(
+  y_log ~ s(AQI) + factor(country) + factor(year) +
+           log_gdp + inflation_rate + unemployment_rate,
+  data = df_iv,
+  method = "REML"
+)
+summary(gam_cy)
+gam.check(gam_cy)
+
+
+```
+
+```{r}
+# Décomposition de la variance
+
+library(lme4)
+library(performance)
+
+mix_mod <- lmer(
+  y_log ~ AQI + log_gdp + inflation_rate + unemployment_rate +
+           (1 | country) + (1 | year) + (1 | id_analyst),
+  data = df_iv
+)
+
+# R² marginal/conditionnel + ICC (variance components)
+performance::r2_nakagawa(mix_mod)
+VarCorr(mix_mod)  # composantes de variance par niveau
+
+```
+
+```{r}
+library(fixest)
+
+m1_ols <- feols(
+  y_log ~ AQI - 1,
+  data = df_iv
+)
+class(m1_ols)
+# "fixest"
+
+lapply(
+  list(m1_ols, m2_fe_cy, m3_fe_cy_ctrl, m4_fe_ay_ctrl),
+  class
+)
+
+```
+
+```{r}
+# effet direct
+# Codes étoiles
+sc_stars <- c("***" = 0.01, "**" = 0.05, "*" = 0.10)
+
+# VCOV aligné (4 modèles = 4 vcov)
+V_cov <- list(
+  ~ country,
+  ~ country + year,
+  ~ country + year,
+  ~ id_analyst + year
+)
+
+etable(
+  m1_ols, m2_fe_cy, m3_fe_cy_ctrl, m4_fe_ay_ctrl,
+  vcov = V_cov,
+  title = "OLS and FE Models — Dependent Variable: Log(Error)",
+  dict = c(
+    "AQI" = "AQI",
+    "y_log" = "Log(Error)",
+    "log_gdp" = "Log(GDP)",
+    "inflation_rate" = "Inflation",
+    "unemployment_rate" = "Unemployment"
+  ),
+  signif.code = sc_stars
+)
+
+```
+
+```{r}
+# Analyses de sensibilité : Leave-one-country-out (LOCO)
+
+countries <- unique(df_iv$country)
+loco_res <- lapply(countries, function(cty) {
+  df_sub <- subset(df_iv, country != cty)
+  mod    <- feols(
+    y_log ~ AQI + log_gdp + inflation_rate + unemployment_rate | country + year,
+    data = df_sub
+  )
+  coef(mod)["AQI"]
+})
+loco_res <- data.frame(country = countries, beta_AQI = unlist(loco_res))
+print(loco_res)
+
+
+```
+
+```{r}
+# effet cumulatif
+library(fixest)
+
+# -------------------------
+# 1) Modèles FE (Analyste + Année)
+# -------------------------
+m1_aqi <- feols(
+  y_log ~ AQI + log_gdp + inflation_rate + unemployment_rate |
+  id_analyst + year,
+  data = df_iv
+)
+
+m2_lag1 <- feols(
+  y_log ~ PM2_5_lag1 + PM10_lag1 + NO2_lag1 + SO2_lag1 +
+          log_gdp + inflation_rate + unemployment_rate |
+  id_analyst + year,
+  data = df_iv
+)
+
+m3_week <- feols(
+  y_log ~ PM2_5_week + PM10_week + NO2_week + SO2_week +
+          log_gdp + inflation_rate + unemployment_rate |
+  id_analyst + year,
+  data = df_iv
+)
+
+m4_2weeks <- feols(
+  y_log ~ PM2_5_2weeks + PM10_2weeks + NO2_2weeks + SO2_2weeks +
+          log_gdp + inflation_rate + unemployment_rate |
+  id_analyst + year,
+  data = df_iv
+)
+
+m5_all_lags <- feols(
+  y_log ~
+    PM2_5_lag1 + PM10_lag1 + NO2_lag1 + SO2_lag1 +
+    PM2_5_week + PM10_week + NO2_week + SO2_week +
+    PM2_5_2weeks + PM10_2weeks + NO2_2weeks + SO2_2weeks +
+    log_gdp + inflation_rate + unemployment_rate |
+  id_analyst + year,
+  data = df_iv
+)
+
+# -------------------------
+# 2) Codes étoiles
+# -------------------------
+sc_stars <- c("***" = 0.01, "**" = 0.05, "*" = 0.10)
+
+# -------------------------
+# 3) VCOV (IMPORTANT : doit exister avant etable)
+# -------------------------
+V_cov_lags <- list(
+  ~ id_analyst + year,
+  ~ id_analyst + year,
+  ~ id_analyst + year,
+  ~ id_analyst + year,
+  ~ id_analyst + year
+)
+
+# -------------------------
+# 4) Table etable
+# -------------------------
+etable(
+  m1_aqi, m2_lag1, m3_week, m4_2weeks, m5_all_lags,
+  vcov = V_cov_lags,
+  title = "FE Models (Analyst + Year) — AQI and Pollutant Lags",
+  dict = c(
+    "y_log" = "Log(Error)",
+    "AQI" = "AQI",
+    "PM2_5_lag1" = "PM2.5 (t−1)",
+    "PM10_lag1" = "PM10 (t−1)",
+    "NO2_lag1" = "NO2 (t−1)",
+    "SO2_lag1" = "SO2 (t−1)",
+    "PM2_5_week" = "PM2.5 (t−7)",
+    "PM10_week" = "PM10 (t−7)",
+    "NO2_week" = "NO2 (t−7)",
+    "SO2_week" = "SO2 (t−7)",
+    "PM2_5_2weeks" = "PM2.5 (t−14)",
+    "PM10_2weeks" = "PM10 (t−14)",
+    "NO2_2weeks" = "NO2 (t−14)",
+    "SO2_2weeks" = "SO2 (t−14)",
+    "log_gdp" = "Log(GDP)",
+    "inflation_rate" = "Inflation",
+    "unemployment_rate" = "Unemployment"
+  ),
+  signif.code = sc_stars
+)
+
+```
+
+```{r}
+
+library(haven)   # si tu ne l’as pas déjà chargé
+
+pblh_path <- "C:/Users/HP/OneDrive/Bureau/HALAS Master Thesis/Data/pblh_aligned.dta"
+pblh <- read_dta(pblh_path)
+
+# Afficher les premières lignes de la base PBLH
+head(pblh)
+
+```
+
+```{r}
+###############################################################
+# BLOC 9 — 2SLS / IV : AQI instrumenté par PBLH
+# - Fusion préalable HALAS + pblh_aligned
+# - FE : Analyst×Year (principal), Country×Year (robustesse)
+# - DV : y_log = Log(Error)
+# - SE clusterisées : explicites dans etable()
+###############################################################
+
+library(dplyr)
+library(haven)
+library(fixest)
+library(AER)
+
+# ------------------------------------------------------------
+# 0) Charger la base PBLH et fusionner avec HALAS
+# ------------------------------------------------------------
+pblh_path <- "C:/Users/HP/OneDrive/Bureau/HALAS Master Thesis/Data/pblh_aligned.dta"
+pblh <- read_dta(pblh_path)
+
+# >>> FUSION sur country + date <<<
+data <- data %>%
+  left_join(pblh, by = c("country", "date"))
+
+# ------------------------------------------------------------
+# 1) Choix automatique de l’instrument disponible
+# ------------------------------------------------------------
+iv_candidates <- c("PBLH","PBLH_mean","pblh","pblh_mean")
+iv_var <- intersect(iv_candidates, names(data))[1]
+if (is.na(iv_var)) stop("Instrument not found in merged data.")
+
+cat(">>> Instrument utilisé :", iv_var, "\n")
+
+# ------------------------------------------------------------
+# 2) Codes étoiles pour la significativité
+# ------------------------------------------------------------
+sc_stars <- c("***"=0.01, "**"=0.05, "*"=0.10)
+
+dict_common <- c(
+  "y_log" = "Log(Error)",
+  "AQI" = "AQI",
+  "I(AQI^2)" = "AQI^2",
+  "log_gdp" = "Log(GDP)",
+  "inflation_rate" = "Inflation",
+  "unemployment_rate" = "Unemployment"
+)
+
+```
+
+```{r}
+head(data)
+```
+
+```{r}
+# ------------------------------------------------------------
+# 0) Préparation : contrôles & codes "étoiles"
+# ------------------------------------------------------------
+if (!exists("f_controls")) {
+  controls_macro <- intersect(
+    c("log_gdp", "inflation_rate", "unemployment_rate"),
+    names(data)
+  )
+  f_controls <- if (length(controls_macro) == 0)
+    "1"
+  else
+    paste(controls_macro, collapse = " + ")
+}
+
+# Signif. codes en astérisques (version 'vecteur nommé' compatible)
+sc_stars <- c("***" = 0.01, "**" = 0.05, "*" = 0.10)
+
+# Petit dictionnaire pour les tables (anglais)
+dict_common <- c(
+  "y_log" = "Log(Error)",
+  "AQI" = "AQI",
+  "I(AQI^2)" = "AQI^2",
+  "log_gdp" = "Log(GDP)",
+  "inflation_rate" = "Inflation",
+  "unemployment_rate" = "Unemployment"
+)
+
+```
+
+```{r}
+# ------------------------------------------------------------
+# 3) Échantillon propre pour IV (SANS supprimer les variables)
+# ------------------------------------------------------------
+df_iv <- data %>%
+  dplyr::filter(
+    is.finite(y_log),
+    is.finite(AQI),
+    is.finite(.data[[iv_var]])
+  )
+
+cat(">>> Obs IV :", nrow(df_iv), "\n")
+
+```
+
+```{r}
+#2LS
+
+library(fixest)
+
+model_1_2sls <- feols(
+  y_log ~ 1 | id_analyst + year | AQI ~ PBLH,
+  data = df_iv
+)
+
+
+```
+
+```{r}
+model_2_2sls <- feols(
+  y_log ~ log_gdp + inflation_rate + unemployment_rate |
+  id_analyst + year |
+  AQI ~ PBLH,
+  data = df_iv
+)
+
+```
+
+```{r}
+etable(
+  model_1_2sls,
+  model_2_2sls,
+  stage = 1:2,
+  dict = c(
+    "y_log" = "Log(Error)",
+    "AQI" = "Air Quality Index",
+    "PBLH" = "Planetary Boundary Layer Height",
+    "log_gdp" = "Log(GDP)",
+    "inflation_rate" = "Inflation Rate",
+    "unemployment_rate" = "Unemployment Rate"
+  ),
+  fitstat = ~ . + ivf,
+  title = "2SLS – AQI Instrumented by PBLH (FE Analyst × Year)",
+  tex = FALSE
+)
+
+
+```
+
+```{r}
+#relation non linéaire 
+df_iv <- df_iv |>
+  dplyr::mutate(AQI_sq = AQI^2)
+
+stopifnot("AQI_sq" %in% names(df_iv))
+
+```
+
+```{r}
+# Modèle 1 — OLS non linéaire sans constante
+m1_nl_ols <- feols(
+  y_log ~ AQI + AQI_sq - 1,
+  data = df_iv
+)
+
+# Modèle 2 — Non linéaire avec FE Analyste × Année
+m2_nl_fe <- feols(
+  y_log ~ AQI + AQI_sq |
+  id_analyst + year,
+  data = df_iv
+)
+
+# Modèle 3 — Non linéaire + contrôles + FE Analyste × Année
+m3_nl_fe_ctrl <- feols(
+  y_log ~ AQI + AQI_sq + log_gdp + inflation_rate + unemployment_rate |
+  id_analyst + year,
+  data = df_iv
+)
+
+
+```
+
+```{r}
+etable(
+  m1_nl_ols,
+  m2_nl_fe,
+  m3_nl_fe_ctrl,
+  dict = c(
+    "y_log" = "Log(Error)",
+    "AQI" = "AQI",
+    "AQI_sq" = "AQI²",
+    "log_gdp" = "Log(GDP)",
+    "inflation_rate" = "Inflation Rate",
+    "unemployment_rate" = "Unemployment Rate"
+  ),
+  title = "Nonlinear Effect of AQI (AQI and AQI²) — OLS and FE Models",
+  tex = FALSE
+)
+
+```
+
+```{r}
+#placebot test
+set.seed(123)
+
+df_iv_placebo <- data |>
+  dplyr::mutate(AQI_placebo = sample(AQI))
+
+stopifnot("AQI_placebo" %in% names(df_iv_placebo))
+
+```
+
+```{r}
+# Modèle 1 — OLS placebo sans constante
+m1_placebo_ols <- feols(
+  y_log ~ AQI_placebo - 1,
+  data = df_iv_placebo
+)
+
+# Modèle 2 — Placebo avec FE Country × Year (AQI seul)
+m2_placebo_fe_cy <- feols(
+  y_log ~ AQI_placebo |
+  country + year,
+  data = df_iv_placebo
+)
+
+# Modèle 3 — Placebo + contrôles, FE Country × Year
+m3_placebo_fe_cy_ctrl <- feols(
+  y_log ~ AQI_placebo + log_gdp + inflation_rate + unemployment_rate |
+  country + year,
+  data = df_iv_placebo
+)
+
+# Modèle 4 — Placebo + contrôles, FE Analyste × Year
+m4_placebo_fe_ay_ctrl <- feols(
+  y_log ~ AQI_placebo + log_gdp + inflation_rate + unemployment_rate |
+  id_analyst + year,
+  data = df_iv_placebo
+)
+
+```
+
+```{r}
+etable(
+  m1_placebo_ols,
+  m2_placebo_fe_cy,
+  m3_placebo_fe_cy_ctrl,
+  m4_placebo_fe_ay_ctrl,
+  dict = c(
+    "y_log" = "Log(Error)",
+    "AQI_placebo" = "AQI (Placebo)",
+    "log_gdp" = "Log(GDP)",
+    "inflation_rate" = "Inflation Rate",
+    "unemployment_rate" = "Unemployment Rate"
+  ),
+  title = "Placebo Tests — Random Permutation of AQI",
+  tex = FALSE
+)
+
+
+```
+
+```{r}
+##placebo test avec les retards
+
+set.seed(123)
+df_iv_placebo <- data |>
+  dplyr::mutate(AQI_placebo = sample(AQI))
+stopifnot("AQI_placebo" %in% names(df_iv_placebo))
+
+
+```
+
+```{r}
+m1_placebo_fe_ay <- feols(
+  y_log ~ AQI_placebo |
+  id_analyst + year,
+  data = df_iv_placebo
+)
+
+```
+
+```{r}
+m5_placebo_fe_ay_lags <- feols(
+  y_log ~ AQI_placebo +
+    PM2_5_lag1 + PM10_lag1 + NO2_lag1 + SO2_lag1 +
+    PM2_5_week + PM10_week + NO2_week + SO2_week +
+    PM2_5_2weeks + PM10_2weeks + NO2_2weeks + SO2_2weeks |
+  id_analyst + year,
+  data = df_iv_placebo
+)
+
+```
+
+```{r}
+etable(
+  m1_placebo_fe_ay,
+  m5_placebo_fe_ay_lags,
+  dict = c(
+    "y_log" = "Log(Error)",
+    "AQI_placebo" = "AQI (Placebo)",
+    "PM2_5_lag1" = "PM2.5 (t−1)",
+    "PM10_lag1"  = "PM10 (t−1)",
+    "NO2_lag1"   = "NO2 (t−1)",
+    "SO2_lag1"   = "SO2 (t−1)",
+    "PM2_5_week" = "PM2.5 (t−7)",
+    "PM10_week"  = "PM10 (t−7)",
+    "NO2_week"   = "NO2 (t−7)",
+    "SO2_week"   = "SO2 (t−7)",
+    "PM2_5_2weeks" = "PM2.5 (t−14)",
+    "PM10_2weeks"  = "PM10 (t−14)",
+    "NO2_2weeks"   = "NO2 (t−14)",
+    "SO2_2weeks"   = "SO2 (t−14)"
+  ),
+  title = "Placebo Tests — AQI Permuted, Analyst × Year Fixed Effects",
+  tex = FALSE
+)
+
+```
+
+```{r}
+#relation non lineraire dans placebo
+
+df_iv_placebo <- df_iv_placebo |>
+  dplyr::mutate(AQI_placebo_sq = AQI_placebo^2)
+stopifnot("AQI_placebo_sq" %in% names(df_iv_placebo))
+
+
+```
+
+```{r}
+# Modèle 1 — OLS non linéaire placebo sans constante
+m1_nl_placebo_ols <- feols(
+  y_log ~ AQI_placebo + AQI_placebo_sq - 1,
+  data = df_iv_placebo
+)
+
+# Modèle 2 — Non linéaire placebo avec FE Analyste × Année
+m2_nl_placebo_fe <- feols(
+  y_log ~ AQI_placebo + AQI_placebo_sq |
+  id_analyst + year,
+  data = df_iv_placebo
+)
+
+# Modèle 3 — Non linéaire placebo + contrôles + FE Analyste × Année
+m3_nl_placebo_fe_ctrl <- feols(
+  y_log ~ AQI_placebo + AQI_placebo_sq +
+          log_gdp + inflation_rate + unemployment_rate |
+  id_analyst + year,
+  data = df_iv_placebo
+)
+
+
+```
+
+```{r}
+etable(
+  m1_nl_placebo_ols,
+  m2_nl_placebo_fe,
+  m3_nl_placebo_fe_ctrl,
+  dict = c(
+    "y_log" = "Log(Error)",
+    "AQI_placebo" = "AQI (Placebo)",
+    "AQI_placebo_sq" = "AQI² (Placebo)",
+    "log_gdp" = "Log(GDP)",
+    "inflation_rate" = "Inflation Rate",
+    "unemployment_rate" = "Unemployment Rate"
+  ),
+  title = "Nonlinear Placebo Tests — AQI and AQI² (FE Analyst × Year)",
+  tex = FALSE
+)
+
+```
+
+```{r}
+##effets country et saison
+
+df_iv <- df_iv |>
+  dplyr::mutate(
+    month = format(as.Date(date), "%m"),
+    season = dplyr::case_when(
+      month %in% c("12", "01", "02") ~ "Winter",
+      month %in% c("03", "04", "05") ~ "Spring",
+      month %in% c("06", "07", "08") ~ "Summer",
+      TRUE                           ~ "Autumn"
+    ),
+    season = factor(season)
+  )
+stopifnot(all(c("season","country") %in% names(df_iv)))
+
+```
+
+```{r}
+df_iv <- df_iv |>
+  dplyr::mutate(
+    log_gdp = ifelse(gdp > 0, log(gdp), NA_real_)
+  )
+
+#Modèle 1 — AQI + contrôles, FE Country × Season
+m1_fe_country_season <- feols(
+  y_log ~ AQI + log_gdp + inflation_rate + unemployment_rate |
+  country + season,
+  data = df_iv
+)
+
+
+#Modèle 2 — Lags des polluants + contrôles, FE Country × Season
+m2_fe_country_season_lags <- feols(
+  y_log ~
+    PM2_5_lag1 + PM10_lag1 + NO2_lag1 + SO2_lag1 +
+    PM2_5_week + PM10_week + NO2_week + SO2_week +
+    PM2_5_2weeks + PM10_2weeks + NO2_2weeks + SO2_2weeks +
+    log_gdp + inflation_rate + unemployment_rate |
+  country + season,
+  data = df_iv
+)
+
+#Modèle 3 — Non linéaire (AQI + AQI²) + contrôles, FE Country × Season
+df_iv <- df_iv |>
+  dplyr::mutate(AQI_sq = AQI^2)
+
+m3_nl_fe_country_season <- feols(
+  y_log ~ AQI + AQI_sq + log_gdp + inflation_rate + unemployment_rate |
+  country + season,
+  data = df_iv
+)
+
+```
+
+```{r}
+etable(
+  m1_fe_country_season,
+  m2_fe_country_season_lags,
+  m3_nl_fe_country_season,
+  dict = c(
+    "y_log" = "Log(Error)",
+    "AQI" = "AQI",
+    "AQI_sq" = "AQI²",
+    "PM2_5_lag1" = "PM2.5 (t−1)",
+    "PM10_lag1" = "PM10 (t−1)",
+    "NO2_lag1" = "NO2 (t−1)",
+    "SO2_lag1" = "SO2 (t−1)",
+    "PM2_5_week" = "PM2.5 (t−7)",
+    "PM10_week" = "PM10 (t−7)",
+    "NO2_week" = "NO2 (t−7)",
+    "SO2_week" = "SO2 (t−7)",
+    "PM2_5_2weeks" = "PM2.5 (t−14)",
+    "PM10_2weeks" = "PM10 (t−14)",
+    "NO2_2weeks" = "NO2 (t−14)",
+    "SO2_2weeks" = "SO2 (t−14)",
+    "log_gdp" = "Log(GDP)",
+    "inflation_rate" = "Inflation",
+    "unemployment_rate" = "Unemployment"
+  ),
+  title = "FE Models — Country × Season Effects",
+  tex = FALSE
+)
+
+```
+
+
+
+
+
+
+
+
+
+
+######################Extraction##################################################""
+```{r}
+## ============================================================
+## BLOC FINAL — EXTRACTION COMPLÈTE (tables, figures, modèles, tests)
+## ============================================================
+
+# Dossiers de sortie
+out_dir   <- "outputs"
+tb_dir    <- file.path(out_dir, "tables")
+pl_dir    <- file.path(out_dir, "plots")
+pretty_dir<- file.path(out_dir, "tables_pretty")
+test_dir  <- file.path(out_dir, "tests")
+
+dir.create(out_dir,    showWarnings = FALSE, recursive = TRUE)
+dir.create(tb_dir,     showWarnings = FALSE, recursive = TRUE)
+dir.create(pl_dir,     showWarnings = FALSE, recursive = TRUE)
+dir.create(pretty_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(test_dir,   showWarnings = FALSE, recursive = TRUE)
+
+# Utilitaires
+.sanitize <- function(x) gsub("[^A-Za-z0-9._-]", "_", x)
+.has_pkg  <- function(p) requireNamespace(p, quietly = TRUE)
+
+# -----------------------------------------------------------------
+# 1) SESSION INFO
+# -----------------------------------------------------------------
+cat(capture.output(sessionInfo()),
+    file = file.path(out_dir, "session_info.txt"), sep = "\n")
+
+# -----------------------------------------------------------------
+# 2) TABLES "BRUTES" (data.frame / tibble / matrix) → CSV (+ XLSX)
+# -----------------------------------------------------------------
+is_like_df <- function(x) inherits(x, c("data.frame","tbl","tbl_df","data.table")) ||
+                           (is.matrix(x) && is.atomic(x))
+nms <- ls(envir = .GlobalEnv, all.names = TRUE)
+for (nm in nms) {
+  obj <- get(nm, envir = .GlobalEnv)
+  if (is_like_df(obj)) {
+    df <- if (is.matrix(obj)) as.data.frame(obj, stringsAsFactors = FALSE) else as.data.frame(obj)
+    fn_csv  <- file.path(tb_dir, paste0(.sanitize(nm), ".csv"))
+    try(utils::write.csv(df, fn_csv, row.names = FALSE), silent = TRUE)
+
+    if (.has_pkg("openxlsx")) {
+      fn_xlsx <- file.path(tb_dir, paste0(.sanitize(nm), ".xlsx"))
+      wb <- openxlsx::createWorkbook()
+      openxlsx::addWorksheet(wb, "data")
+      openxlsx::writeData(wb, "data", df)
+      try(openxlsx::saveWorkbook(wb, fn_xlsx, overwrite = TRUE), silent = TRUE)
+    }
+  }
+}
+
+# -----------------------------------------------------------------
+# 3) FIGURES CLÉS — on les re-dessine et on sauvegarde en PNG
+#    (fidèles aux geoms/titres/axes dans ton script)
+# -----------------------------------------------------------------
+save_plot <- function(p, basename, w = 10, h = 7, dpi = 200) {
+  fp <- file.path(pl_dir, paste0(.sanitize(basename), ".png"))
+  if (.has_pkg("ggplot2")) ggplot2::ggsave(fp, plot = p, width = w, height = h, dpi = dpi)
+  else { png(fp, width = w*160, height = h*160, res = dpi); print(p); dev.off() }
+}
+
+# 2.4 Average AQI by Year (Europe)
+if (exists("aqi_by_year")) {
+  p <- ggplot(aqi_by_year, aes(x = as.factor(year), y = mean_AQI)) +
+    geom_col(fill = "#2C7BB6") +
+    geom_text(aes(label = round(mean_AQI,1)), vjust = -0.3, size = 3) +
+    labs(title = "Average AQI by Year (Europe)", x = "Year", y = "Average AQI") +
+    theme_minimal() + theme(plot.title = element_text(face = "bold"))
+  save_plot(p, "Figure_AQI_by_Year_Europe")
+}
+
+# 2.5 Average AQI by Year — FR, DE, GB, CH (line facets)
+if (exists("aqi_by_year_ctry")) {
+  p <- ggplot(aqi_by_year_ctry, aes(x = year, y = mean_AQI, color = country)) +
+    geom_line() + geom_point() +
+    facet_wrap(~ country, scales = "free_y") +
+    scale_color_viridis_d(end = 0.85) +
+    labs(title = "Average AQI by Year — FR, DE, GB, CH",
+         x = "Year", y = "Average AQI", color = "Country") +
+    theme_minimal()
+  save_plot(p, "Figure_AQI_by_Year_Faceted")
+}
+
+# 2.6 Annual Pollutant Trends (Europe)
+if (exists("poll_year_eu")) {
+  p <- ggplot(poll_year_eu, aes(x = year, y = mean_val, color = pollutant)) +
+    geom_line() + geom_point() +
+    scale_color_viridis_d(end = 0.9) +
+    labs(title = "Annual Pollutant Trends",
+         x = "Year", y = "Average Concentration", color = "Pollutant") +
+    theme_minimal()
+  save_plot(p, "Figure_Pollutants_Annual_Europe")
+}
+
+# 2.7 Pollutants Annual — 4 countries (facets)
+if (exists("by_ctry_year")) {
+  p <- ggplot(by_ctry_year, aes(year, mean_val, color = pollutant)) +
+    geom_line() + geom_point() +
+    facet_wrap(~ country, scales = "free_y") +
+    scale_color_viridis_d(end = 0.9) +
+    labs(title = "Annual Pollutant Trends by Country (FR, DE, GB, CH — excluding AQI)",
+         x = "Year", y = "Average Concentration", color = "Pollutant") +
+    theme_minimal()
+  save_plot(p, "Figure_Pollutants_Annual_by_Country")
+}
+
+# BAR faceted AQI by Year (FR, DE, GB, CH)
+if (exists("aqi_by_year_ctry")) {
+  p <- ggplot(aqi_by_year_ctry, aes(x = factor(year), y = mean_AQI)) +
+    geom_col(fill = "#2C7BB6") +
+    facet_wrap(~ country, scales = "free_y") +
+    labs(title = "Average AQI by Year — FR, DE, GB, CH (Bar, Faceted)",
+         x = "Year", y = "Average AQI") +
+    theme_minimal() + theme(plot.title = element_text(face = "bold"))
+  save_plot(p, "Figure_AQI_by_Year_Bar_Faceted")
+}
+
+# Seasonality AQI (Monthly Average)
+if (exists("aqi_season")) {
+  p <- ggplot(aqi_season, aes(x = month, y = mean_AQI, group = 1)) +
+    geom_line(color = "#1B9E77") + geom_point(color = "#1B9E77") +
+    labs(title = "Seasonal Pattern of AQI (Monthly Average)",
+         x = "Month", y = "Average AQI") +
+    theme_minimal()
+  save_plot(p, "Figure_AQI_Seasonality")
+}
+
+# 2.15 Average Log(Error) by Year (Europe + facets)
+if (exists("err_by_year")) {
+  p <- ggplot(err_by_year, aes(x = as.factor(year), y = mean_ylog)) +
+    geom_col(fill = "#6BA292") +
+    geom_errorbar(aes(ymin = mean_ylog - 1.96*se, ymax = mean_ylog + 1.96*se), width = .15) +
+    labs(title = "Average Log(Error) by Year (Europe)",
+         x = "Year", y = "Average Log(Error)") + theme_minimal()
+  save_plot(p, "Figure_ylog_by_Year_Europe")
+}
+if (exists("err_by_year_ctry")) {
+  p <- ggplot(err_by_year_ctry, aes(x = year, y = mean_ylog)) +
+    geom_line(color = "#4C78A8") + geom_point(color = "#4C78A8") +
+    facet_wrap(~ country, scales = "free_y") +
+    labs(title = "Average Log(Error) by Year — FR, DE, GB, CH",
+         x = "Year", y = "Average Log(Error)") + theme_minimal()
+  save_plot(p, "Figure_ylog_by_Year_Faceted")
+}
+
+
+# 2.16 Relationship AQI vs y_log (GAM)
+if (exists("plot_df")) {
+  p <- ggplot(plot_df, aes(x = AQI, y = y_log)) +
+    geom_point(color = "#2C7BE5", alpha = 0.35, size = 1.4) +
+    geom_smooth(method = "gam", formula = y ~ s(x, k = 6),
+                color = "#E15759", fill = "grey75", se = TRUE, linewidth = 1.1) +
+    labs(title = "Relationship Between AQI and Analysts' Forecast Error",
+         x = "AQI", y = "Log(Error)") +
+    theme_minimal(base_size = 12) + theme(panel.grid.minor = element_blank())
+  save_plot(p, "Figure_AQI_vs_ylog_GAM")
+}
+
+
+# 2.17 Trends AQI vs y_log (dual-axis)
+if (exists("plot_both") && exists("a") && exists("b")) {
+  p <- ggplot(plot_both, aes(x = year, y = y_plot, color = series, linetype = series)) +
+    geom_line(linewidth = 1) + geom_point(size = 2) +
+    scale_color_manual(name = "Indicator",
+      values = c("AQI" = "#F28E2B", "Average Log(Error)" = "grey40")) +
+    scale_linetype_manual(name = "Indicator",
+      values = c("AQI" = "solid", "Average Log(Error)" = "dashed")) +
+    scale_x_continuous(breaks = sort(unique(plot_both$year))) +
+    scale_y_continuous(name = "Average AQI",
+      sec.axis = sec_axis(~ (. - a) / b, name = "Average Log(Error)")) +
+    labs(title = "Trends in Air Pollution and Analysts' Forecast Error", x = "Year") +
+    theme_minimal(base_size = 12) +
+    theme(plot.title = element_text(face = "bold", size = 16),
+          axis.title.y       = element_text(color = "#F28E2B", face = "bold"),
+          axis.title.y.right = element_text(color = "#1F77B4", face = "bold"),
+          legend.position    = "right")
+  save_plot(p, "Figure_Trends_AQI_ylog_DualAxis")
+}
+
+```
+
+
+
+```{r}
+# ------------------------------------------------------------
+# 2.18 Distribution of forecast errors by pollution levels
+# y_log ~ pollution_level (quartiles de AQI)
+# ------------------------------------------------------------
+if (all(c("AQI","y_log") %in% names(data))) {
+  library(dplyr); library(ggplot2)
+
+  # 1) Niveaux de pollution via quartiles (Low / Moderate / High / Very High)
+  q <- quantile(data$AQI, probs = c(.25, .50, .75), na.rm = TRUE)
+  cut_pollution <- function(x) cut(
+    x,
+    breaks = c(-Inf, q[1], q[2], q[3], Inf),
+    labels = c("Low", "Moderate", "High", "Very High"),
+    right = TRUE, include.lowest = TRUE
+  )
+
+  df_218 <- data %>%
+    mutate(
+      pollution_level = cut_pollution(AQI),
+      y_log_ok = ifelse(is.finite(y_log), y_log, NA_real_)
+    ) %>%
+    filter(!is.na(pollution_level), !is.na(y_log_ok))
+
+  p_218 <- ggplot(df_218, aes(x = pollution_level, y = y_log_ok, fill = pollution_level)) +
+    geom_boxplot(outlier.alpha = .35) +
+    scale_fill_viridis_d(end = .9, option = "C") +
+    labs(
+  title = "Distribution of forecast errors by pollution levels",
+  x = "Pollution Level", y = "Log(Error)"
+) +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "right", plot.title = element_text(face = "bold"))
+
+  save_plot(p_218, "Section_2_18_ForecastError_by_PollutionLevels", w = 10, h = 7, dpi = 200)
+} else {
+  message("[2.18] Colonnes requises absentes : besoin de 'AQI' et 'y_log'.")
+}
+
+# ------------------------------------------------------------
+# 2.19 Comparison of forecast errors by country
+# y_log ~ country (ordre des pays par médiane décroissante)
+# ------------------------------------------------------------
+if (all(c("country","y_log") %in% names(data))) {
+  library(dplyr); library(ggplot2)
+
+  # 1) Ordre des pays par médiane de y_log
+  order_country <- data %>%
+    filter(is.finite(y_log), !is.na(country)) %>%
+    group_by(country) %>%
+    summarise(med = median(y_log), .groups = "drop") %>%
+    arrange(desc(med)) %>%
+    pull(country)
+
+  df_219 <- data %>%
+    mutate(
+      country = factor(country, levels = order_country),
+      y_log_ok = ifelse(is.finite(y_log), y_log, NA_real_)
+    ) %>%
+    filter(!is.na(country), !is.na(y_log_ok))
+
+  p_219 <- ggplot(df_219, aes(x = country, y = y_log_ok, fill = country)) +
+    geom_boxplot(outlier.size = .9, outlier.alpha = .3) +
+    scale_fill_viridis_d(end = .95) +
+   labs(
+  title = "Comparison of forecast errors by country",
+  x = "Country", y = "Log(Error)"
+) +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "right",
+          axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1),
+          plot.title  = element_text(face = "bold"))
+
+  save_plot(p_219, "Section_2_19_ForecastError_by_Country", w = 11, h = 7.5, dpi = 200)
+} else {
+  message("[2.19] Colonnes requises absentes : besoin de 'country' et 'y_log'.")
+}
+```
+
+
+
+```{r}
+
+# -----------------------------------------------------------------
+# 4) TABLEAUX DE RÉGRESSION (fixest::etable) → HTML autonome
+#    Wrapper do.call avec gestion explicite des headers
+# -----------------------------------------------------------------
+render_etable <- function(title, basename, models, headers = NULL,
+                          dict = NULL, signif.code = NULL,
+                          vcov = NULL, tex = FALSE, ...) {
+
+  # Neutraliser l'auto-déduction des headers si non fournis
+  if (is.null(headers)) headers <- NA
+
+  # FIX ABSOLU : empêcher etable de déduire des noms incorrects
+  if (!is.na(headers[1])) {
+    names(models) <- headers
+  }
+
+  # Construire la liste d'arguments pour etable
+  args <- c(
+    models,
+    list(
+      headers     = headers,
+      dict        = dict,
+      signif.code = signif.code,
+      vcov        = vcov,
+      tex         = tex
+    ),
+    list(...)
+  )
+
+  out <- capture.output(do.call(fixest::etable, args))
+
+  html <- paste(c(
+    sprintf("<h3>%s</h3>", title),
+    "<pre style='white-space: pre-wrap; font-family: Consolas, Menlo, monospace;'>",
+    out,
+    "</pre>"
+  ), collapse = "\n")
+
+  cat(
+    html,
+    file = file.path(pretty_dir, paste0(.sanitize(basename), ".html"))
+  )
+}
+
+
+```
+
+
+
+```{r}
+# ============================================================
+# HELPERS – validation des vcov pour fixest::etable
+# ============================================================
+
+.vcov_ok_one <- function(m, V){
+  if (is.null(V)) return(FALSE)
+  if (!is.matrix(V)) return(FALSE)
+  k <- length(stats::coef(m))
+  isTRUE(nrow(V) == k && ncol(V) == k)
+}
+
+.safe_vcov_for_models <- function(models, vc){
+  if (is.null(vc)) return(NULL)
+
+  # 1) une seule matrice → accepté uniquement pour 1 modèle
+  if (is.matrix(vc)) {
+    if (length(models) == 1 && .vcov_ok_one(models[[1]], vc)) return(vc)
+    return(NULL)
+  }
+
+  # 2) liste de matrices → une par modèle
+  if (is.list(vc)) {
+    if (length(vc) != length(models)) return(NULL)
+    ok <- mapply(.vcov_ok_one, models, vc)
+    if (all(ok)) return(vc)
+    return(NULL)
+  }
+
+  # 3) string / formule / fonction (géré par fixest)
+  vc
+}
+
+```
+
+
+```{r}
+# ============================================================
+# (i) OLS + FE (country/year/analyst) — Extraction
+#  -> à placer APRÈS les helpers .vcov_ok_one / .safe_vcov_for_models
+#     et AVANT ton bloc (ii)
+# ============================================================
+
+if (exists("m1_ols") && exists("m2_fe_cy") && exists("m3_fe_cy_ctrl") && exists("m4_fe_ay_ctrl")) {
+
+  # Liste des modèles et en-têtes souhaités
+  models_i  <- list(m1_ols, m2_fe_cy, m3_fe_cy_ctrl, m4_fe_ay_ctrl)
+  headers_i <- c(
+    "OLS",
+    "FE: country + year",
+    "FE: country + year + controls",
+    "FE: analyst + year + controls"
+  )
+
+  # Vecteur des codes 'étoiles' (fallback si non défini)
+  sc_i <- if (exists("sc_stars")) sc_stars else c("***"=0.01, "**"=0.05, "*"=0.10)
+
+  # vcov (liste de formules, ou NULL) puis validation sécurisée
+  vc_raw_i <- if (exists("V_cov")) V_cov else NULL
+  vc_i     <- .safe_vcov_for_models(models_i, vc_raw_i)
+
+  # >>> Export de la table
+  render_etable(
+    title    = "OLS and FE Models — Dependent Variable: Log(Error)",
+    basename = "Reg_OLS_FE",
+    models   = models_i,
+    vcov     = vc_i,
+    dict     = c(
+      "AQI" = "AQI",
+      "y_log" = "Log(Error)",
+      "inflation_rate" = "Inflation",
+      "unemployment_rate" = "Unemployment"
+    ),
+    signif.code = sc_i,
+    headers  = headers_i
+  )
+}
+
+```
+
+
+```{r}
+# (ii) FE Analyst×Year — Lags des polluants
+if (exists("m1_aqi") && exists("m2_lag1") && exists("m3_week") && exists("m4_2weeks") && exists("m5_all_lags")) {
+
+  models_ii  <- list(m1_aqi, m2_lag1, m3_week, m4_2weeks, m5_all_lags)
+  headers_ii <- c("AQI", "Lags t−1", "Lags 1 week", "Lags 2 weeks", "All lags")
+
+  vc_raw <- if (exists("V_cov_lags")) V_cov_lags else NULL
+  vc <- .safe_vcov_for_models(models_ii, vc_raw)   # <-- clé
+
+  render_etable(
+    title    = "FE Models (Analyst + Year) — AQI and Pollutant Lags",
+    basename = "Reg_FE_AnalystYear_Lags",
+    models   = models_ii,
+    vcov     = vc,
+    dict     = c(
+      "y_log" = "Log(Error)",
+      "AQI" = "AQI",
+      "PM2_5_lag1" = "PM2.5 (t−1)",
+      "PM10_lag1"  = "PM10 (t−1)",
+      "NO2_lag1"   = "NO2 (t−1)",
+      "SO2_lag1"   = "SO2 (t−1)",
+      "PM2_5_week" = "PM2.5 (t−7)",
+      "PM10_week"  = "PM10 (t−7)",
+      "NO2_week"   = "NO2 (t−7)",
+      "SO2_week"   = "SO2 (t−7)",
+      "PM2_5_2weeks" = "PM2.5 (t−14)",
+      "PM10_2weeks"  = "PM10 (t−14)",
+      "NO2_2weeks"   = "NO2 (t−14)",
+      "SO2_2weeks"   = "SO2 (t−14)",
+      "inflation_rate" = "Inflation",
+      "unemployment_rate" = "Unemployment"
+    ),
+    headers  = headers_ii
+  )
+}
+
+
+```
+
+
+```{r}
+# (iii) 2SLS / IV — stage 1:2 + ivf
+if (exists("model_1_2sls") && exists("model_2_2sls")) {
+  render_etable(
+    title    = "2SLS – AQI Instrumented by PBLH (FE Analyst × Year)",
+    basename = "Reg_2SLS_IV",
+    models   = list(model_1_2sls, model_2_2sls),
+    dict     = c(
+      "y_log"="Log(Error)",
+      "AQI"="Air Quality Index",
+      "PBLH"="Planetary Boundary Layer Height",
+      "log_gdp"="Log(GDP)",
+      "inflation_rate"="Inflation Rate",
+      "unemployment_rate"="Unemployment Rate"
+    ),
+    tex      = FALSE,
+    headers  = c("Model 1 (Stage 1&2)", "Model 2 (Stage 1&2)"),
+    stage    = 1:2,
+    fitstat  = ~ . + ivf
+  )
+}
+
+
+# (iv) Non-linéaire (AQI & AQI²)
+if (exists("m1_nl_ols") && exists("m2_nl_fe") && exists("m3_nl_fe_ctrl")) {
+  render_etable(
+    title    = "Nonlinear Effect of AQI (AQI and AQI²) — OLS and FE Models",
+    basename = "Reg_Nonlinear_AQI_AQI2",
+    models   = list(m1_nl_ols, m2_nl_fe, m3_nl_fe_ctrl),
+    dict     = c(
+      "y_log"="Log(Error)",
+      "AQI"="AQI",
+      "AQI_sq"="AQI²",
+      "log_gdp"="Log(GDP)",
+      "inflation_rate"="Inflation Rate",
+      "unemployment_rate"="Unemployment Rate"
+    ),
+    tex      = FALSE,
+    headers  = c("OLS (no const.)", "FE Analyst×Year", "FE + controls")
+  )
+}
+
+# (v) Placebo (AQI permuté)
+if (exists("m1_placebo_ols") && exists("m2_placebo_fe_cy") &&
+    exists("m3_placebo_fe_cy_ctrl") && exists("m4_placebo_fe_ay_ctrl")) {
+  render_etable(
+    title    = "Placebo Tests — Random Permutation of AQI",
+    basename = "Reg_Placebo_AQI",
+    models   = list(m1_placebo_ols, m2_placebo_fe_cy,
+                    m3_placebo_fe_cy_ctrl, m4_placebo_fe_ay_ctrl),
+    dict     = c(
+      "y_log"="Log(Error)",
+      "AQI_placebo"="AQI (Placebo)",
+      "log_gdp"="Log(GDP)",
+      "inflation_rate"="Inflation Rate",
+      "unemployment_rate"="Unemployment Rate"
+    ),
+    tex      = FALSE,
+    headers  = c("OLS placebo", "FE CY placebo",
+                 "FE CY + controls", "FE AY + controls")
+  )
+}
+
+
+# (vi) Country × Season
+if (exists("m1_fe_country_season") && exists("m2_fe_country_season_lags") && exists("m3_nl_fe_country_season")) {
+  render_etable(
+    title    = "FE Models — Country × Season Effects",
+    basename = "Reg_FE_Country_Season",
+    models   = list(m1_fe_country_season, m2_fe_country_season_lags, m3_nl_fe_country_season),
+    dict     = c("y_log"="Log(Error)","AQI"="AQI","AQI_sq"="AQI²",
+                 "PM2_5_lag1"="PM2.5 (t−1)","PM10_lag1"="PM10 (t−1)","NO2_lag1"="NO2 (t−1)","SO2_lag1"="SO2 (t−1)",
+                 "PM2_5_week"="PM2.5 (t−7)","PM10_week"="PM10 (t−7)","NO2_week"="NO2 (t−7)","SO2_week"="SO2 (t−7)",
+                 "PM2_5_2weeks"="PM2.5 (t−14)","PM10_2weeks"="PM10 (t−14)","NO2_2weeks"="NO2 (t−14)","SO2_2weeks"="SO2 (t−14)",
+                 "log_gdp"="Log(GDP)","inflation_rate"="Inflation","unemployment_rate"="Unemployment"),
+    tex      = FALSE,
+    headers  = c("AQI + controls", "Pollutant lags + controls", "AQI + AQI² + controls")
+  )
+}
+```
+
+
+```{r}
+###############################################################
+# Extraction & Export des diagnostics/robustesses
+###############################################################
+
+suppressPackageStartupMessages({
+  library(dplyr); library(broom); library(kableExtra)
+})
+
+# ---- 0) Dossier de sortie (daté) ----
+# Crée un dossier horodaté et des sous-dossiers pour HTML / TeX / logs.
+out_root <- "C:/Users/HP/OneDrive/Bureau/HALAS Master Thesis/Outputs"
+if (!dir.exists(out_root)) dir.create(out_root, recursive = TRUE)
+
+if (!exists("out_dir")) {
+  stamp   <- format(Sys.time(), "%Y-%m-%d_%Hh%M")
+  out_dir <- file.path(out_root, paste0("run_", stamp))
+  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+}
+dir_html <- file.path(out_dir, "tables_html"); if (!dir.exists(dir_html)) dir.create(dir_html, recursive = TRUE)
+dir_tex  <- file.path(out_dir, "tables_tex");  if (!dir.exists(dir_tex))  dir.create(dir_tex,  recursive = TRUE)
+dir_logs <- file.path(out_dir, "logs");        if (!dir.exists(dir_logs)) dir.create(dir_logs, recursive = TRUE)
+
+cat("✓ Dossier d'export :", out_dir, "\n")
+
+# ---- 1) Helpers réutilisables ----
+# Sauvegarde une table kable en HTML (et TeX si souhaité).
+save_kable <- function(kbl_obj, name, to_tex = TRUE) {
+  html_path <- file.path(dir_html, paste0(name, ".html"))
+  kableExtra::save_kable(kbl_obj, file = html_path)
+  if (isTRUE(to_tex)) {
+    tex_path <- file.path(dir_tex, paste0(name, ".tex"))
+    kableExtra::save_kable(kbl_obj, file = tex_path)
+  }
+  message("  → Table saved:", basename(html_path))
+}
+
+# Sauvegarde une sortie brute (tests, summaries) en .txt (annexes).
+save_text <- function(expr, name) {
+  f <- file.path(dir_logs, paste0(name, ".txt"))
+  con <- file(f, open = "wt", encoding = "UTF-8")
+  sink(con); on.exit({sink(); close(con)}, add = TRUE)
+  print(expr)
+}
+
+# ---- 2) Diagnostics de forme fonctionnelle : Ramsey RESET (OLS) vs GAM ----
+# Construit une table unique comparant RESET et les lissages GAM (edf/F/p-val).
+diag_tbl <- NULL
+
+# 2.1 RESET (sur OLS de base)
+if (exists("m1_ols")) {
+  reset_res <- tryCatch(lmtest::resettest(m1_ols), error = function(e) NULL)
+  if (!is.null(reset_res)) {
+    diag_tbl <- dplyr::bind_rows(diag_tbl, data.frame(
+      Test = "Ramsey RESET (baseline OLS)",
+      Stat = unname(reset_res$statistic[1]),
+      df1  = unname(reset_res$parameter[1]),
+      df2  = ifelse(length(reset_res$parameter) > 1, unname(reset_res$parameter[2]), NA_real_),
+      pval = unname(reset_res$p.value)
+    ))
+    save_text(reset_res, "A_resettest_m1_ols_raw")
+  }
+}
+
+# 2.2 GAM — EDF / Stat / p-value des lissages (ta version stable)
+# Remarque : noms de colonnes harmonisés en minuscules ; gère F ou Chi.sq, p-value/p.value.
+if (exists("gam_cy")) {
+  gam_sm <- summary(gam_cy)
+
+  s_tab <- as.data.frame(gam_sm$s.table)
+  if (nrow(s_tab) > 0) {
+    # Noms des lissages et harmonisation de la casse
+    s_tab$term <- rownames(gam_sm$s.table)
+    colnames(s_tab) <- tolower(colnames(s_tab))
+
+    # Colonne de statistique (F pour gaussian, Chi.sq pour GLM)
+    stat_col <- NULL
+    if ("f" %in% colnames(s_tab))      stat_col <- "f"
+    if ("chi.sq" %in% colnames(s_tab)) stat_col <- "chi.sq"
+
+    # Colonnes minimales
+    if (!"edf" %in% colnames(s_tab)) stop("EDF missing in GAM table.")
+    if (!"ref.df" %in% colnames(s_tab)) s_tab[["ref.df"]] <- NA_real_
+
+    # Valeur de stat et p-value (normalisée)
+    s_tab$stat_value <- if (is.null(stat_col)) NA_real_ else s_tab[[stat_col]]
+    if ("p-value" %in% colnames(s_tab)) {
+      s_tab$pval <- s_tab[["p-value"]]
+    } else if ("p.value" %in% colnames(s_tab)) {
+      s_tab$pval <- s_tab[["p.value"]]
+    } else {
+      s_tab$pval <- NA_real_
+    }
+
+    # Table finale (EN pour la présentation)
+    gam_df <- s_tab %>%
+      dplyr::transmute(
+        Test = paste0("GAM — ", term),
+        Stat = stat_value,
+        df1  = edf,
+        df2  = `ref.df`,
+        pval = pval
+      )
+
+    diag_tbl <- dplyr::bind_rows(diag_tbl, gam_df)
+
+    # Logs bruts (annexe)
+    save_text(gam_sm, "A_gam_summary_raw")
+    save_text(capture.output(mgcv::gam.check(gam_cy)), "A_gam_check_raw")
+  }
+}
+
+# 2.3 Export de la table conjointe RESET vs GAM
+if (!is.null(diag_tbl) && nrow(diag_tbl) > 0) {
+  diag_tbl_pr <- diag_tbl %>%
+    dplyr::mutate(
+      Stat = round(Stat, 3),
+      df1  = round(df1, 2),
+      df2  = round(df2, 2),
+      pval = ifelse(is.na(pval), NA, format.pval(pval, digits = 3, eps = 1e-4))
+    ) %>%
+    dplyr::arrange(Test) %>%
+    kableExtra::kbl(caption = "Functional Form Diagnostics: Ramsey RESET (OLS) vs GAM smooths",
+                    align = "lrrrr", booktabs = TRUE) %>%
+    kableExtra::kable_classic(full_width = FALSE)
+  save_kable(diag_tbl_pr, "A_diagnostics_reset_vs_gam")
+}
+
+# ---- 3) Hausman (FE vs RE) ----
+# Compare FE vs RE pour justifier l'usage des FE.
+if (exists("plm_fe") && exists("plm_re")) {
+  haus <- tryCatch(plm::phtest(plm_fe, plm_re), error = function(e) NULL)
+  if (!is.null(haus)) {
+    haus_df <- data.frame(
+      Test = "Hausman FE vs RE",
+      Chi2 = unname(haus$statistic),
+      df   = unname(haus$parameter),
+      pval = unname(haus$p.value)
+    )
+    haus_tbl <- haus_df %>%
+      dplyr::mutate(Chi2 = round(Chi2, 3),
+                    pval = format.pval(pval, digits = 3, eps = 1e-4)) %>%
+      kableExtra::kbl(caption = "Hausman Test — Choosing FE over RE (country×year panel)",
+                      align = "lrrr", booktabs = TRUE) %>%
+      kableExtra::kable_classic(full_width = FALSE)
+    save_kable(haus_tbl, "B_hausman_fe_vs_re")
+    save_text(haus, "B_hausman_raw")
+  }
+}
+
+# ---- 4) Décomposition de la variance (modèle mixte) + R² de Nakagawa ----
+# Montre la part expliquée par les effets fixes vs aléatoires et la variance par niveau.
+if (exists("mix_mod")) {
+  # R² marginal / conditionnel
+  r2nk <- tryCatch(performance::r2_nakagawa(mix_mod), error = function(e) NULL)
+  if (!is.null(r2nk)) {
+    r2_tbl <- data.frame(
+      Metric = c("Marginal R² (fixed effects)", "Conditional R² (fixed + random)"),
+      Value  = c(r2nk$R2_marginal, r2nk$R2_conditional)
+    ) %>%
+      dplyr::mutate(Value = round(Value, 3)) %>%
+      kableExtra::kbl(caption = "Nakagawa R² — Mixed-effects model",
+                      align = "lr", booktabs = TRUE) %>%
+      kableExtra::kable_classic(full_width = FALSE)
+    save_kable(r2_tbl, "C1_r2_nakagawa_mixed")
+    save_text(r2nk, "C1_r2_nakagawa_raw")
+  }
+  # Variances par niveau (composantes aléatoires)
+  vc <- tryCatch(lme4::VarCorr(mix_mod), error = function(e) NULL)
+  if (!is.null(vc)) {
+    vc_df <- as.data.frame(vc) %>%
+      dplyr::transmute(
+        Effect = grp,
+        Component = ifelse(is.na(var1), "(Intercept)", var1),
+        Variance = vcov
+      ) %>%
+      dplyr::group_by(Effect) %>%
+      dplyr::summarise(Variance = sum(Variance, na.rm = TRUE), .groups = "drop") %>%
+      dplyr::mutate(Variance = round(Variance, 4))
+    vc_tbl <- vc_df %>%
+      kableExtra::kbl(caption = "Variance Decomposition — random components",
+                      align = "lr", booktabs = TRUE) %>%
+      kableExtra::kable_classic(full_width = FALSE)
+    save_kable(vc_tbl, "C2_variance_components_mixed")
+    save_text(vc, "C2_variance_components_raw")
+  }
+}
+
+# ---- 5) Sensibilité — Leave-one-country-out (LOCO) ----
+# Stabilité du coefficient AQI quand on retire un pays.
+if (exists("loco_res")) {
+  loco_tbl <- loco_res %>%
+    dplyr::rename(`Country dropped` = country, `Beta on AQI` = beta_AQI) %>%
+    dplyr::mutate(`Beta on AQI` = round(`Beta on AQI`, 4)) %>%
+    dplyr::arrange(`Country dropped`) %>%
+    kableExtra::kbl(caption = "Sensitivity — Leave‑one‑country‑out (beta on AQI)",
+                    align = "lr", booktabs = TRUE) %>%
+    kableExtra::kable_classic(full_width = FALSE)
+  save_kable(loco_tbl, "D_sensitivity_loco_beta_aqi")
+  save_text(loco_res, "D_sensitivity_loco_raw")
+}
+
+# ---- 6) (Optionnel) Diagnostics OLS supplémentaires : Breusch–Pagan & Durbin–Watson ----
+# Hétéroscédasticité et autocorrélation sur le modèle OLS de base.
+if (exists("m1_ols")) {
+  bp_res <- tryCatch(lmtest::bptest(m1_ols), error = function(e) NULL)
+  dw_res <- tryCatch(lmtest::dwtest(m1_ols), error = function(e) NULL)
+
+  diag_more <- NULL
+  if (!is.null(bp_res)) {
+    diag_more <- dplyr::bind_rows(diag_more, data.frame(
+      Test = "Breusch–Pagan (OLS)",
+      Stat = unname(bp_res$statistic),
+      df   = unname(bp_res$parameter),
+      pval = unname(bp_res$p.value)
+    ))
+    save_text(bp_res, "E_bptest_m1_ols_raw")
+  }
+  if (!is.null(dw_res)) {
+    diag_more <- dplyr::bind_rows(diag_more, data.frame(
+      Test = "Durbin–Watson (OLS)",
+      Stat = unname(dw_res$statistic),
+      df   = NA_real_,
+      pval = unname(dw_res$p.value)
+    ))
+    save_text(dw_res, "E_dwtest_m1_ols_raw")
+  }
+
+  if (!is.null(diag_more)) {
+    diag_more_pr <- diag_more %>%
+      dplyr::mutate(
+        Stat = round(Stat, 3),
+        df   = ifelse(is.na(df), NA, round(df, 2)),
+        pval = format.pval(pval, digits = 3, eps = 1e-4)
+      ) %>%
+      kableExtra::kbl(caption = "Additional OLS diagnostics — Breusch–Pagan & Durbin–Watson",
+                      align = "lrrr", booktabs = TRUE) %>%
+      kableExtra::kable_classic(full_width = FALSE)
+    save_kable(diag_more_pr, "E_other_diagnostics_bp_dw")
+  }
+}
+
+cat("\n✓ Extraction & exports : terminé. Voir le dossier :\n", out_dir, "\n")
+``
+```
+
+
+
+
+
+```{r}
+# ==========================
+# Table 1 — Dictionnaire des variables (auto, robuste)
+# ==========================
+dict_dir <- file.path(out_dir, "tables_pretty")
+dir.create(dict_dir, showWarnings = FALSE, recursive = TRUE)
+html_path <- file.path(dict_dir, "Table_1_Variables.html")
+png_path  <- file.path(dict_dir, "Table_1_Variables.png")
+
+# 1) Lexique des définitions (à adapter si besoin)
+var_defs <- c(
+  "cname"="Company name.",
+  "country"="ISO code of the country of observation.",
+  "country_name"="Full name of the country.",
+  "date"="Date of the forecast.",
+  "year"="Year of observation.",
+  "id_analyst"="Unique identifier of the financial analyst.",
+  "value"="Analyst’s forecasted value (expected).",
+  "actual"="Actual realized value.",
+  "err_abs"="Absolute forecast error |value − actual|.",
+  "ape"="Relative error = |value − actual| / |actual|.",
+  "y_log"="Log(Error), main dependent variable.",
+  "y_asinh"="asinh(APE), alternative transformation.",
+  "mean_abs_err_jt"="Cross-analyst mean absolute error at (firm, date).",
+  "afe"="Analyst’s absolute error scaled by mean_abs_err_jt.",
+  "y_log_afe"="log(afe + ε), robustness DV.",
+  "high_error"="Dummy =1 if forecast error exceeds threshold.",
+  "AQI"="Air Quality Index (higher = worse air quality).",
+  "NO2"="Daily average NO₂ (µg/m³).",
+  "PM10"="Daily average PM10 (µg/m³).",
+  "PM2_5"="Daily average PM2.5 (µg/m³).",
+  "SO2"="Daily average SO₂ (µg/m³).",
+  "gdp"="Gross Domestic Product.",
+  "log_gdp"="Log of GDP.",
+  "inflation_rate"="Inflation rate.",
+  "unemployment_rate"="Unemployment rate.",
+  "NO2_lag1"="NO₂ previous day (D−1).",
+  "PM10_lag1"="PM10 previous day (D−1).",
+  "PM2_5_lag1"="PM2.5 previous day (D−1).",
+  "SO2_lag1"="SO₂ previous day (D−1).",
+  "NO2_week"="7‑day avg NO₂ (D−8 to D−1).",
+  "PM10_week"="7‑day avg PM10 (D−8 to D−1).",
+  "PM2_5_week"="7‑day avg PM2.5 (D−8 to D−1).",
+  "SO2_week"="7‑day avg SO₂ (D−8 to D−1).",
+  "NO2_2weeks"="14‑day avg NO₂ (D−15 to D−1).",
+  "PM10_2weeks"="14‑day avg PM10 (D−15 to D−1).",
+  "PM2_5_2weeks"="14‑day avg PM2.5 (D−15 to D−1).",
+  "SO2_2weeks"="14‑day avg SO₂ (D−15 to D−1).",
+  "PBLH"="Planetary Boundary Layer Height (instrument).",
+  "PBLH_mean"="Mean PBLH (if available).",
+  "AQI_sq"="AQI squared.",
+  "AQI_placebo"="Random permutation of AQI (placebo).",
+  "AQI_placebo_sq"="Squared placebo AQI.",
+  "month"="Month factor from date.",
+  "season"="Season factor (Winter/Spring/Summer/Autumn)."
+)
+
+# 2) Variables réellement présentes dans 'data'
+present <- intersect(names(var_defs), names(data))
+
+# 3) Si rien ne matche (lexique vs data), on génère un dico minimal
+if (length(present) == 0) {
+  message("[Dictionnaire] Aucune correspondance nommée avec var_defs. Fallback sur noms(data).")
+  dict_tbl <- data.frame(
+    `Variable name` = names(data),
+    Definition = "",
+    check.names = FALSE
+  )
+} else {
+  order_pref <- c(
+    "cname","country","country_name","date","year","id_analyst",
+    "value","actual","err_abs","ape","y_log","y_asinh","mean_abs_err_jt","afe","y_log_afe","high_error",
+    "AQI","NO2","PM10","PM2_5","SO2",
+    "gdp","log_gdp","inflation_rate","unemployment_rate",
+    "NO2_lag1","PM10_lag1","PM2_5_lag1","SO2_lag1",
+    "NO2_week","PM10_week","PM2_5_week","SO2_week",
+    "NO2_2weeks","PM10_2weeks","PM2_5_2weeks","SO2_2weeks",
+    "PBLH","PBLH_mean","AQI_sq","AQI_placebo","AQI_placebo_sq","month","season"
+  )
+  ordered <- intersect(order_pref, present)
+  ordered <- c(ordered, setdiff(present, ordered))
+
+  dict_tbl <- data.frame(
+    `Variable name` = ordered,
+    Definition      = unname(var_defs[ordered]),
+    check.names = FALSE
+  )
+}
+
+# 4) Sauvegarde HTML robuste
+saved <- FALSE
+
+# a) kableExtra direct
+if (!saved && requireNamespace("kableExtra", quietly = TRUE)) {
+  kb <- knitr::kable(dict_tbl, format = "html", booktabs = TRUE,
+                     col.names = c("Variable name", "Definition"),
+                     caption = "Table 1: Variables") |>
+        kableExtra::kable_classic(full_width = FALSE)
+  # utilise la fonction dédiée pour écrire un vrai HTML
+  try({
+    kableExtra::save_kable(kb, file = html_path)  # <- évite les "NULL"
+    saved <- file.exists(html_path)
+  }, silent = TRUE)
+}
+
+# b) fallback avec gt
+if (!saved && requireNamespace("gt", quietly = TRUE)) {
+  try({
+    gt_tbl <- gt::gt(dict_tbl) |>
+      gt::tab_caption("Table 1: Variables")
+    gt::gtsave(gt_tbl, filename = html_path)
+    saved <- file.exists(html_path)
+  }, silent = TRUE)
+}
+
+# c) fallback HTML minimal à la main
+if (!saved) {
+  rows <- apply(dict_tbl, 1, function(r) sprintf("<tr><td><b>%s</b></td><td>%s</td></tr>", r[[1]], r[[2]]))
+  html_min <- paste0(
+    "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Table 1: Variables</title>",
+    "<style>body{font-family:Segoe UI,Arial,sans-serif;margin:24px;} table{border-collapse:collapse;} ",
+    "th,td{border:1px solid #ccc;padding:8px 10px;} caption{font-weight:bold;margin-bottom:8px;}</style>",
+    "</head><body>",
+    "<table><caption>Table 1: Variables</caption>",
+    "<thead><tr><th>Variable name</th><th>Definition</th></tr></thead><tbody>",
+    paste(rows, collapse = ""),
+    "</tbody></table></body></html>"
+  )
+  cat(html_min, file = html_path)
+  saved <- file.exists(html_path)
+}
+
+# 5) PNG optionnel via webshot2 (uniquement si HTML bien écrit)
+if (saved && requireNamespace("webshot2", quietly = TRUE)) {
+  try(webshot2::webshot(url = html_path, file = png_path, vwidth = 1200, vheight = 1600, delay = 0.3), silent = TRUE)
+}
+
+message("[OK] Table 1: Variables exportée → ", normalizePath(html_path, winslash = "/"))
+```
+```{r}
+# ==========================
+# Table 2 – Distribution by Country
+# ==========================
+
+# Construction de la table
+dict_country <- tibble::tibble(
+  country = counts_country$country,
+  n_obs   = counts_country$n_obs
+) %>%
+  dplyr::left_join(
+    unique(data[, c("country", "country_name")]),
+    by = "country"
+  ) %>%
+  dplyr::mutate(
+    percent = round(100 * n_obs / sum(n_obs), 2),
+    cum     = round(cumsum(percent), 2)
+  ) %>%
+  dplyr::select(
+    `ISO Country Code` = country,
+    `Country Name`     = country_name,
+    `Freq.`            = n_obs,
+    `Percent`          = percent,
+    `Cum.`             = cum
+  )
+
+# Ajout de la ligne TOTAL (sans casser les types)
+dict_country <- dplyr::bind_rows(
+  dict_country,
+  tibble::tibble(
+    `ISO Country Code` = "Total",
+    `Country Name`     = "",
+    `Freq.`            = sum(counts_country$n_obs),
+    `Percent`          = 100,
+    `Cum.`             = 100
+  )
+)
+
+# Export HTML
+kb <- knitr::kable(
+  dict_country,
+  format   = "html",
+  booktabs = TRUE,
+  caption  = "Table 2: Distribution of observations by country"
+) |>
+  kableExtra::kable_classic(full_width = FALSE)
+
+kableExtra::save_kable(
+  kb,
+  file = file.path("outputs", "tables_pretty", "Table_2_Country_Distribution.html")
+)
+
+message("[OK] Table 2 exportée → outputs/tables_pretty/Table_2_Country_Distribution.html")
+
+```
+
+```{r}
+# ==========================
+# Table 3 — Descriptive statistics of key variables
+# (labels = EXACTEMENT les mêmes noms que dans la liste officielle)
+# ==========================
+tb_dir     <- file.path(out_dir, "tables")
+pretty_dir <- file.path(out_dir, "tables_pretty")
+dir.create(tb_dir,     showWarnings = FALSE, recursive = TRUE)
+dir.create(pretty_dir, showWarnings = FALSE, recursive = TRUE)
+
+# 1) Variables clés, dans l'ordre logique de ta Table 1 (ajuste si besoin)
+vars_order <- c(
+  # DV & erreurs
+  "y_log", "ape", "err_abs", "y_asinh",
+  # Pollution (niveaux)
+  "AQI", "NO2", "PM10", "PM2_5", "SO2",
+  # Lags J-1
+  "NO2_lag1","PM10_lag1","PM2_5_lag1","SO2_lag1",
+  # Moyennes 7 jours
+  "NO2_week","PM10_week","PM2_5_week","SO2_week",
+  # Moyennes 14 jours
+  "NO2_2weeks","PM10_2weeks","PM2_5_2weeks","SO2_2weeks",
+  # Macros
+  "inflation_rate","unemployment_rate","log_gdp",
+  # Instrument si présent
+  "PBLH"
+)
+
+# 2) Restreindre aux variables effectivement présentes dans 'data'
+vars_present <- intersect(vars_order, names(data))
+
+# 3) Fonction de stats robuste aux NA/inf
+.safe_stats <- function(x) {
+  x <- x[is.finite(x)]
+  if (length(x) == 0) return(c(NA, NA, NA, NA, NA, 0))
+  c(mean(x), stats::median(x), stats::sd(x), min(x), max(x), length(x))
+}
+
+# 4) Calcul des stats en gardant EXACTEMENT les noms de variables
+desc_list <- lapply(vars_present, function(v) {
+  s <- .safe_stats(data[[v]])
+  data.frame(
+    Variable    = v,          # <-- pas de mapping : on garde le nom EXACT
+    Average     = s[1],
+    Median      = s[2],
+    `Std. dev.` = s[3],
+    Min         = s[4],
+    Max         = s[5],
+    `Nb Obs`    = sum(!is.na(data[[v]])),
+    check.names = FALSE
+  )
+})
+
+# 5) Assembler + typer
+desc3 <- if (length(desc_list)) do.call(rbind, desc_list) else {
+  data.frame(Variable=character(), Average=double(), Median=double(),
+             `Std. dev.`=double(), Min=double(), Max=double(),
+             `Nb Obs`=integer(), check.names = FALSE)
+}
+num_cols <- c("Average","Median","Std. dev.","Min","Max")
+for (cc in num_cols) if (cc %in% names(desc3)) desc3[[cc]] <- as.numeric(desc3[[cc]])
+if ("Nb Obs" %in% names(desc3)) desc3[["Nb Obs"]] <- as.integer(desc3[["Nb Obs"]])
+
+# 6) Export CSV (+ XLSX)
+csv_path <- file.path(tb_dir, "Table_3_Descriptives.csv")
+readr::write_csv(desc3, csv_path)
+if (requireNamespace("openxlsx", quietly = TRUE)) {
+  wb <- openxlsx::createWorkbook()
+  openxlsx::addWorksheet(wb, "Table3")
+  openxlsx::writeData(wb, "Table3", desc3)
+  openxlsx::saveWorkbook(wb, file.path(tb_dir, "Table_3_Descriptives.xlsx"), overwrite = TRUE)
+}
+
+# 7) Export HTML (kableExtra) avec fallback HTML simple; PNG optionnel
+html_path <- file.path(pretty_dir, "Table_3_Descriptives.html")
+png_path  <- file.path(pretty_dir, "Table_3_Descriptives.png")
+
+saved <- FALSE
+if (requireNamespace("kableExtra", quietly = TRUE)) {
+  kb <- knitr::kable(
+          desc3, format = "html", booktabs = TRUE,
+          digits = c(NA, rep(3,5), 0),
+          col.names = c("Variable","Average","Median","Std. dev.","Min","Max","Nb Obs"),
+          caption = "Table 3: Descriptive statistics of key variables"
+        ) |>
+        kableExtra::kable_classic(full_width = FALSE)
+  try({ kableExtra::save_kable(kb, file = html_path); saved <- file.exists(html_path) }, silent = TRUE)
+}
+if (!saved) {
+  # Fallback HTML minimal
+  rows <- apply(desc3, 1, function(r)
+    sprintf("<tr>%s</tr>", paste(sprintf("<td>%s</td>", r), collapse = "")))
+  html_min <- paste0(
+    "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Table 3</title>",
+    "<style>body{font-family:Segoe UI,Arial,sans-serif;margin:24px;} table{border-collapse:collapse;} ",
+    "th,td{border:1px solid #ccc;padding:6px 10px;} caption{font-weight:bold;margin-bottom:8px;}</style>",
+    "</head><body><table><caption>Table 3: Descriptive statistics of key variables</caption>",
+    "<thead><tr><th>Variable</th><th>Average</th><th>Median</th><th>Std. dev.</th><th>Min</th><th>Max</th><th>Nb Obs</th></tr></thead>",
+    "<tbody>", paste(rows, collapse=""), "</tbody></table></body></html>"
+  )
+  cat(html_min, file = html_path)
+}
+
+# 8) PNG optionnel via webshot2
+if (requireNamespace("webshot2", quietly = TRUE) && file.exists(html_path)) {
+  try(webshot2::webshot(url = html_path, file = png_path, vwidth = 1100, vheight = 1400, delay = 0.3), silent = TRUE)
+}
+
+message("[OK] Table 3 (noms EXACTS) → ",
+        normalizePath(html_path, winslash = "/"), " & ",
+        normalizePath(csv_path, winslash = "/"))
+```
+
+
+
+```{r}
+message("[OK] Extraction terminée → ", normalizePath(out_dir, winslash = "/"))
+## ============================================================
+
+```
 
