@@ -175,7 +175,7 @@ data <- data %>%
 
 vars_descrip <- c(
   # Erreurs (brutes et transformées)
-  "err_abs", "ape", "y_log", "y_asinh", "afe", "y_log_afe",
+  "err_abs", "ape", "y_log", "y_asinh", "afe", "y_log_afe","mean_abs_err_jt", 
   # Pollution
   "AQI", "NO2", "PM10", "PM2_5", "SO2",
   # Macros
@@ -953,17 +953,18 @@ lapply(
 # Codes étoiles
 sc_stars <- c("***" = 0.01, "**" = 0.05, "*" = 0.10)
 
-# VCOV aligné (4 modèles = 4 vcov)
-V_cov <- list(
-  ~ country,
-  ~ country + year,
-  ~ country + year,
-  ~ id_analyst + year
-)
+# effet direct
+# Codes étoiles
+sc_stars <- c("***" = 0.01, "**" = 0.05, "*" = 0.10)
 
 etable(
   m1_ols, m2_fe_cy, m3_fe_cy_ctrl, m4_fe_ay_ctrl,
-  vcov = V_cov,
+  vcov = list(
+    ~ country,
+    ~ country + year,
+    ~ country + year,
+    ~ id_analyst + year
+  ),
   title = "OLS and FE Models — Dependent Variable: Log(Error)",
   dict = c(
     "AQI" = "AQI",
@@ -999,9 +1000,6 @@ print(loco_res)
 # effet cumulatif
 library(fixest)
 
-# -------------------------
-# 1) Modèles FE (Analyste + Année)
-# -------------------------
 m1_aqi <- feols(
   y_log ~ AQI + log_gdp + inflation_rate + unemployment_rate |
   id_analyst + year,
@@ -1039,28 +1037,11 @@ m5_all_lags <- feols(
   data = df_iv
 )
 
-# -------------------------
-# 2) Codes étoiles
-# -------------------------
 sc_stars <- c("***" = 0.01, "**" = 0.05, "*" = 0.10)
 
-# -------------------------
-# 3) VCOV (IMPORTANT : doit exister avant etable)
-# -------------------------
-V_cov_lags <- list(
-  ~ id_analyst + year,
-  ~ id_analyst + year,
-  ~ id_analyst + year,
-  ~ id_analyst + year,
-  ~ id_analyst + year
-)
-
-# -------------------------
-# 4) Table etable
-# -------------------------
 etable(
   m1_aqi, m2_lag1, m3_week, m4_2weeks, m5_all_lags,
-  vcov = V_cov_lags,
+  vcov = ~ id_analyst + year,
   title = "FE Models (Analyst + Year) — AQI and Pollutant Lags",
   dict = c(
     "y_log" = "Log(Error)",
@@ -1083,7 +1064,6 @@ etable(
   ),
   signif.code = sc_stars
 )
-
 ```
 
 ```{r}
@@ -1223,6 +1203,7 @@ model_2_2sls <- feols(
 etable(
   model_1_2sls,
   model_2_2sls,
+  vcov = ~ id_analyst + year,
   stage = 1:2,
   dict = c(
     "y_log" = "Log(Error)",
@@ -1236,8 +1217,6 @@ etable(
   title = "2SLS – AQI Instrumented by PBLH (FE Analyst × Year)",
   tex = FALSE
 )
-
-
 ```
 
 ```{r}
@@ -1278,6 +1257,11 @@ etable(
   m1_nl_ols,
   m2_nl_fe,
   m3_nl_fe_ctrl,
+  vcov = list(
+    ~ country,
+    ~ id_analyst + year,
+    ~ id_analyst + year
+  ),
   dict = c(
     "y_log" = "Log(Error)",
     "AQI" = "AQI",
@@ -1339,6 +1323,12 @@ etable(
   m2_placebo_fe_cy,
   m3_placebo_fe_cy_ctrl,
   m4_placebo_fe_ay_ctrl,
+  vcov = list(
+    ~ country,
+    ~ country + year,
+    ~ country + year,
+    ~ id_analyst + year
+  ),
   dict = c(
     "y_log" = "Log(Error)",
     "AQI_placebo" = "AQI (Placebo)",
@@ -1349,7 +1339,6 @@ etable(
   title = "Placebo Tests — Random Permutation of AQI",
   tex = FALSE
 )
-
 
 ```
 
@@ -1389,6 +1378,7 @@ m5_placebo_fe_ay_lags <- feols(
 etable(
   m1_placebo_fe_ay,
   m5_placebo_fe_ay_lags,
+  vcov = ~ id_analyst + year,
   dict = c(
     "y_log" = "Log(Error)",
     "AQI_placebo" = "AQI (Placebo)",
@@ -1408,7 +1398,6 @@ etable(
   title = "Placebo Tests — AQI Permuted, Analyst × Year Fixed Effects",
   tex = FALSE
 )
-
 ```
 
 ```{r}
@@ -1451,6 +1440,11 @@ etable(
   m1_nl_placebo_ols,
   m2_nl_placebo_fe,
   m3_nl_placebo_fe_ctrl,
+  vcov = list(
+    ~ country,
+    ~ id_analyst + year,
+    ~ id_analyst + year
+  ),
   dict = c(
     "y_log" = "Log(Error)",
     "AQI_placebo" = "AQI (Placebo)",
@@ -1525,6 +1519,7 @@ etable(
   m1_fe_country_season,
   m2_fe_country_season_lags,
   m3_nl_fe_country_season,
+  vcov = ~ country,
   dict = c(
     "y_log" = "Log(Error)",
     "AQI" = "AQI",
@@ -1835,15 +1830,12 @@ render_etable <- function(title, basename, models, headers = NULL,
                           dict = NULL, signif.code = NULL,
                           vcov = NULL, tex = FALSE, ...) {
 
-  # Neutraliser l'auto-déduction des headers si non fournis
   if (is.null(headers)) headers <- NA
 
-  # FIX ABSOLU : empêcher etable de déduire des noms incorrects
   if (!is.na(headers[1])) {
     names(models) <- headers
   }
 
-  # Construire la liste d'arguments pour etable
   args <- c(
     models,
     list(
@@ -1878,7 +1870,7 @@ render_etable <- function(title, basename, models, headers = NULL,
 
 ```{r}
 # ============================================================
-# HELPERS – validation des vcov pour fixest::etable
+# HELPERS – validation simple des vcov pour fixest::etable
 # ============================================================
 
 .vcov_ok_one <- function(m, V){
@@ -1891,13 +1883,22 @@ render_etable <- function(title, basename, models, headers = NULL,
 .safe_vcov_for_models <- function(models, vc){
   if (is.null(vc)) return(NULL)
 
-  # 1) une seule matrice → accepté uniquement pour 1 modèle
+  # Cas formule simple : ~ country, ~ id_analyst + year
+  if (inherits(vc, "formula")) return(vc)
+
+  # Cas liste de formules : list(~ country, ~ country + year, ...)
+  if (is.list(vc) && all(vapply(vc, inherits, logical(1), "formula"))) {
+    if (length(vc) == length(models)) return(vc)
+    return(NULL)
+  }
+
+  # Cas matrice unique
   if (is.matrix(vc)) {
     if (length(models) == 1 && .vcov_ok_one(models[[1]], vc)) return(vc)
     return(NULL)
   }
 
-  # 2) liste de matrices → une par modèle
+  # Cas liste de matrices
   if (is.list(vc)) {
     if (length(vc) != length(models)) return(NULL)
     ok <- mapply(.vcov_ok_one, models, vc)
@@ -1905,73 +1906,105 @@ render_etable <- function(title, basename, models, headers = NULL,
     return(NULL)
   }
 
-  # 3) string / formule / fonction (géré par fixest)
   vc
 }
 
 ```
 
+```{r}
+df_iv <- data
+# Sauvegarde de la base principale avant les filtres IV
+df_main <- data
+```
+
+
+
+
+
+
+
 
 ```{r}
+
 # ============================================================
 # (i) OLS + FE (country/year/analyst) — Extraction
-#  -> à placer APRÈS les helpers .vcov_ok_one / .safe_vcov_for_models
-#     et AVANT ton bloc (ii)
 # ============================================================
 
-if (exists("m1_ols") && exists("m2_fe_cy") && exists("m3_fe_cy_ctrl") && exists("m4_fe_ay_ctrl")) {
+if (exists("df_main")) {
 
-  # Liste des modèles et en-têtes souhaités
-  models_i  <- list(m1_ols, m2_fe_cy, m3_fe_cy_ctrl, m4_fe_ay_ctrl)
-  headers_i <- c(
-    "OLS",
-    "FE: country + year",
-    "FE: country + year + controls",
-    "FE: analyst + year + controls"
+  m1_ols_export <- feols(
+    y_log ~ AQI - 1,
+    data = df_main
   )
 
-  # Vecteur des codes 'étoiles' (fallback si non défini)
-  sc_i <- if (exists("sc_stars")) sc_stars else c("***"=0.01, "**"=0.05, "*"=0.10)
-
-  # vcov (liste de formules, ou NULL) puis validation sécurisée
-  vc_raw_i <- if (exists("V_cov")) V_cov else NULL
-  vc_i     <- .safe_vcov_for_models(models_i, vc_raw_i)
-
-  # >>> Export de la table
-  render_etable(
-    title    = "OLS and FE Models — Dependent Variable: Log(Error)",
-    basename = "Reg_OLS_FE",
-    models   = models_i,
-    vcov     = vc_i,
-    dict     = c(
-      "AQI" = "AQI",
-      "y_log" = "Log(Error)",
-      "inflation_rate" = "Inflation",
-      "unemployment_rate" = "Unemployment"
-    ),
-    signif.code = sc_i,
-    headers  = headers_i
+  m2_fe_cy_export <- feols(
+    y_log ~ AQI | country + year,
+    data = df_main
   )
+
+  m3_fe_cy_ctrl_export <- feols(
+    y_log ~ AQI + log_gdp + inflation_rate + unemployment_rate | country + year,
+    data = df_main
+  )
+
+  m4_fe_ay_ctrl_export <- feols(
+    y_log ~ AQI + log_gdp + inflation_rate + unemployment_rate | id_analyst + year,
+    data = df_main
+  )
+
+  out <- capture.output(
+    etable(
+      m1_ols_export,
+      m2_fe_cy_export,
+      m3_fe_cy_ctrl_export,
+      m4_fe_ay_ctrl_export,
+      vcov = list(
+        ~ country,
+        ~ country + year,
+        ~ country + year,
+        ~ id_analyst + year
+      ),
+      title = "OLS and FE Models — Dependent Variable: Log(Error)",
+      dict = c(
+        "AQI" = "AQI",
+        "y_log" = "Log(Error)",
+        "log_gdp" = "Log(GDP)",
+        "inflation_rate" = "Inflation",
+        "unemployment_rate" = "Unemployment"
+      ),
+      signif.code = if (exists("sc_stars")) sc_stars else c("***"=0.01, "**"=0.05, "*"=0.10),
+      tex = FALSE
+    )
+  )
+
+  html <- paste(c(
+    "<h3>OLS and FE Models — Dependent Variable: Log(Error)</h3>",
+    "<pre style='white-space: pre-wrap; font-family: Consolas, Menlo, monospace;'>",
+    out,
+    "</pre>"
+  ), collapse = "\n")
+
+  cat(html, file = file.path(pretty_dir, "Reg_OLS_FE.html"))
 }
-
 ```
 
 
 ```{r}
+# ============================================================
 # (ii) FE Analyst×Year — Lags des polluants
+# ============================================================
+
 if (exists("m1_aqi") && exists("m2_lag1") && exists("m3_week") && exists("m4_2weeks") && exists("m5_all_lags")) {
 
   models_ii  <- list(m1_aqi, m2_lag1, m3_week, m4_2weeks, m5_all_lags)
-  headers_ii <- c("AQI", "Lags t−1", "Lags 1 week", "Lags 2 weeks", "All lags")
 
-  vc_raw <- if (exists("V_cov_lags")) V_cov_lags else NULL
-  vc <- .safe_vcov_for_models(models_ii, vc_raw)   # <-- clé
+  headers_ii <- c("AQI", "Lags t−1", "Lags 1 week", "Lags 2 weeks", "All lags")
 
   render_etable(
     title    = "FE Models (Analyst + Year) — AQI and Pollutant Lags",
     basename = "Reg_FE_AnalystYear_Lags",
     models   = models_ii,
-    vcov     = vc,
+    vcov     = ~ id_analyst + year,
     dict     = c(
       "y_log" = "Log(Error)",
       "AQI" = "AQI",
@@ -1987,24 +2020,28 @@ if (exists("m1_aqi") && exists("m2_lag1") && exists("m3_week") && exists("m4_2we
       "PM10_2weeks"  = "PM10 (t−14)",
       "NO2_2weeks"   = "NO2 (t−14)",
       "SO2_2weeks"   = "SO2 (t−14)",
+      "log_gdp" = "Log(GDP)",
       "inflation_rate" = "Inflation",
       "unemployment_rate" = "Unemployment"
     ),
     headers  = headers_ii
   )
 }
-
-
 ```
 
 
 ```{r}
+# ============================================================
 # (iii) 2SLS / IV — stage 1:2 + ivf
+# ============================================================
+
 if (exists("model_1_2sls") && exists("model_2_2sls")) {
+
   render_etable(
     title    = "2SLS – AQI Instrumented by PBLH (FE Analyst × Year)",
     basename = "Reg_2SLS_IV",
     models   = list(model_1_2sls, model_2_2sls),
+    vcov     = ~ id_analyst + year,
     dict     = c(
       "y_log"="Log(Error)",
       "AQI"="Air Quality Index",
@@ -2021,12 +2058,21 @@ if (exists("model_1_2sls") && exists("model_2_2sls")) {
 }
 
 
+# ============================================================
 # (iv) Non-linéaire (AQI & AQI²)
+# ============================================================
+
 if (exists("m1_nl_ols") && exists("m2_nl_fe") && exists("m3_nl_fe_ctrl")) {
+
   render_etable(
     title    = "Nonlinear Effect of AQI (AQI and AQI²) — OLS and FE Models",
     basename = "Reg_Nonlinear_AQI_AQI2",
     models   = list(m1_nl_ols, m2_nl_fe, m3_nl_fe_ctrl),
+    vcov     = list(
+      ~ country,
+      ~ id_analyst + year,
+      ~ id_analyst + year
+    ),
     dict     = c(
       "y_log"="Log(Error)",
       "AQI"="AQI",
@@ -2040,14 +2086,29 @@ if (exists("m1_nl_ols") && exists("m2_nl_fe") && exists("m3_nl_fe_ctrl")) {
   )
 }
 
+
+# ============================================================
 # (v) Placebo (AQI permuté)
+# ============================================================
+
 if (exists("m1_placebo_ols") && exists("m2_placebo_fe_cy") &&
     exists("m3_placebo_fe_cy_ctrl") && exists("m4_placebo_fe_ay_ctrl")) {
+
   render_etable(
     title    = "Placebo Tests — Random Permutation of AQI",
     basename = "Reg_Placebo_AQI",
-    models   = list(m1_placebo_ols, m2_placebo_fe_cy,
-                    m3_placebo_fe_cy_ctrl, m4_placebo_fe_ay_ctrl),
+    models   = list(
+      m1_placebo_ols,
+      m2_placebo_fe_cy,
+      m3_placebo_fe_cy_ctrl,
+      m4_placebo_fe_ay_ctrl
+    ),
+    vcov     = list(
+      ~ country,
+      ~ country + year,
+      ~ country + year,
+      ~ id_analyst + year
+    ),
     dict     = c(
       "y_log"="Log(Error)",
       "AQI_placebo"="AQI (Placebo)",
@@ -2056,28 +2117,52 @@ if (exists("m1_placebo_ols") && exists("m2_placebo_fe_cy") &&
       "unemployment_rate"="Unemployment Rate"
     ),
     tex      = FALSE,
-    headers  = c("OLS placebo", "FE CY placebo",
-                 "FE CY + controls", "FE AY + controls")
+    headers  = c("OLS placebo", "FE CY placebo", "FE CY + controls", "FE AY + controls")
   )
 }
 
-
+# ============================================================
 # (vi) Country × Season
+# ============================================================
+
 if (exists("m1_fe_country_season") && exists("m2_fe_country_season_lags") && exists("m3_nl_fe_country_season")) {
+
   render_etable(
     title    = "FE Models — Country × Season Effects",
     basename = "Reg_FE_Country_Season",
-    models   = list(m1_fe_country_season, m2_fe_country_season_lags, m3_nl_fe_country_season),
-    dict     = c("y_log"="Log(Error)","AQI"="AQI","AQI_sq"="AQI²",
-                 "PM2_5_lag1"="PM2.5 (t−1)","PM10_lag1"="PM10 (t−1)","NO2_lag1"="NO2 (t−1)","SO2_lag1"="SO2 (t−1)",
-                 "PM2_5_week"="PM2.5 (t−7)","PM10_week"="PM10 (t−7)","NO2_week"="NO2 (t−7)","SO2_week"="SO2 (t−7)",
-                 "PM2_5_2weeks"="PM2.5 (t−14)","PM10_2weeks"="PM10 (t−14)","NO2_2weeks"="NO2 (t−14)","SO2_2weeks"="SO2 (t−14)",
-                 "log_gdp"="Log(GDP)","inflation_rate"="Inflation","unemployment_rate"="Unemployment"),
+    models   = list(
+      m1_fe_country_season,
+      m2_fe_country_season_lags,
+      m3_nl_fe_country_season
+    ),
+    vcov     = ~ country,
+    dict     = c(
+      "y_log"="Log(Error)",
+      "AQI"="AQI",
+      "AQI_sq"="AQI²",
+      "PM2_5_lag1"="PM2.5 (t−1)",
+      "PM10_lag1"="PM10 (t−1)",
+      "NO2_lag1"="NO2 (t−1)",
+      "SO2_lag1"="SO2 (t−1)",
+      "PM2_5_week"="PM2.5 (t−7)",
+      "PM10_week"="PM10 (t−7)",
+      "NO2_week"="NO2 (t−7)",
+      "SO2_week"="SO2 (t−7)",
+      "PM2_5_2weeks"="PM2.5 (t−14)",
+      "PM10_2weeks"="PM10 (t−14)",
+      "NO2_2weeks"="NO2 (t−14)",
+      "SO2_2weeks"="SO2 (t−14)",
+      "log_gdp"="Log(GDP)",
+      "inflation_rate"="Inflation",
+      "unemployment_rate"="Unemployment"
+    ),
     tex      = FALSE,
     headers  = c("AQI + controls", "Pollutant lags + controls", "AQI + AQI² + controls")
   )
 }
 ```
+
+
 
 
 ```{r}
@@ -2323,7 +2408,6 @@ if (exists("m1_ols")) {
 }
 
 cat("\n✓ Extraction & exports : terminé. Voir le dossier :\n", out_dir, "\n")
-``
 ```
 
 
@@ -2538,7 +2622,7 @@ dir.create(pretty_dir, showWarnings = FALSE, recursive = TRUE)
 # 1) Variables clés, dans l'ordre logique de ta Table 1 (ajuste si besoin)
 vars_order <- c(
   # DV & erreurs
-  "y_log", "ape", "err_abs", "y_asinh",
+  "y_log", "ape", "err_abs", "y_asinh","mean_abs_err_jt", "afe",
   # Pollution (niveaux)
   "AQI", "NO2", "PM10", "PM2_5", "SO2",
   # Lags J-1
