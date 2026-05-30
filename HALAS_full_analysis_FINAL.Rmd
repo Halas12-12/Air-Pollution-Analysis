@@ -639,7 +639,7 @@ if (all(c("AQI","y_log") %in% names(data))) {
 
   # 2) Graphique
   fig6 <- ggplot(fig6_df, aes(x = pollution_level, y = y_log_ok, fill = pollution_level)) +
-    geom_boxplot(outlier.alpha = .35) +
+    geom_violin(trim = FALSE, alpha = 0.85) +
     scale_fill_viridis_d(end = .9, option = "C") +
     labs(
       title = "Distribution of forecast errors by pollution levels",
@@ -682,12 +682,13 @@ if (all(c("country","y_log") %in% names(data))) {
 
   # 2) Graphique
   fig7 <- ggplot(fig7_df, aes(x = country, y = y_log_ok, fill = country)) +
-    geom_boxplot(outlier.size = .9, outlier.alpha = .3) +
+    geom_violin(trim = FALSE, alpha = 0.85) +
     labs(
       title = "Comparison of forecast errors by country",
       x = "Country", y = "Log(Error)"
     ) +
     scale_fill_viridis_d(end = .95) +
+    coord_cartesian(ylim = c(-12, 5)) +
     theme_minimal(base_size = 12) +
     theme(legend.position = "right",
           axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1),
@@ -1764,7 +1765,7 @@ if (all(c("AQI","y_log") %in% names(data))) {
     filter(!is.na(pollution_level), !is.na(y_log_ok))
 
   p_218 <- ggplot(df_218, aes(x = pollution_level, y = y_log_ok, fill = pollution_level)) +
-    geom_boxplot(outlier.alpha = .35) +
+    geom_violin(trim = FALSE, alpha = 0.85) +
     scale_fill_viridis_d(end = .9, option = "C") +
     labs(
   title = "Distribution of forecast errors by pollution levels",
@@ -1800,9 +1801,10 @@ if (all(c("country","y_log") %in% names(data))) {
     ) %>%
     filter(!is.na(country), !is.na(y_log_ok))
 
-  p_219 <- ggplot(df_219, aes(x = country, y = y_log_ok, fill = country)) +
-    geom_boxplot(outlier.size = .9, outlier.alpha = .3) +
+ p_219 <- ggplot(df_219, aes(x = country, y = y_log_ok, fill = country)) +
+    geom_violin(trim = FALSE, alpha = 0.85) +
     scale_fill_viridis_d(end = .95) +
+   coord_cartesian(ylim = c(-12, 5)) +
    labs(
   title = "Comparison of forecast errors by country",
   x = "Country", y = "Log(Error)"
@@ -2721,12 +2723,3 @@ message("[OK] Table 3 (noms EXACTS) → ",
         normalizePath(html_path, winslash = "/"), " & ",
         normalizePath(csv_path, winslash = "/"))
 ```
-
-
-
-```{r}
-message("[OK] Extraction terminée → ", normalizePath(out_dir, winslash = "/"))
-## ============================================================
-
-```
-
